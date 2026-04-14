@@ -10,7 +10,11 @@ find_package(catkin REQUIRED COMPONENTS
   roslib
 )
 
+# Find Eigen3
 find_package(Eigen3 REQUIRED)
+if(Eigen3_FOUND)
+  include_directories(${EIGEN3_INCLUDE_DIRS})
+endif()
 
 # Try to find tinyxml2
 find_package(tinyxml2 QUIET)
