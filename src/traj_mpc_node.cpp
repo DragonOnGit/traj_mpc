@@ -58,15 +58,7 @@ private:
   geometry_msgs::PoseStamped target_pose_;
   geometry_msgs::TwistStamped target_velocity_;
   
-  // Callbacks
-  void stateCallback(const mavros_msgs::State::ConstPtr& msg);
-  void batteryCallback(const sensor_msgs::BatteryState::ConstPtr& msg);
-  void imuCallback(const sensor_msgs::Imu::ConstPtr& msg);
-  
-  // PX4 control methods
-  bool setOffboardMode();
-  bool armVehicle();
-  void publishOffboardSetpoints();
+
   
 public:
   TrajMPCNode() : mpc_controller_(nh_) {
@@ -175,7 +167,7 @@ public:
     }
   }
   
-  void publishOffboardSetpoints() {
+  void publishOffboardSetpoints(const ros::TimerEvent& event) {
     // Check if offboard mode is active
     if (!offboard_active_) {
       return;
