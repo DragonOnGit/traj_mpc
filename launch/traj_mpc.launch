@@ -12,9 +12,12 @@
     <param name="control_rate" value="10.0" />
     
     <!-- Topic Parameters -->
-    <param name="odom_topic" value="/Odometry" />
+    <param name="odom_topic" value="/mavros/local_position/odom" />
     
     <!-- Trajectory File -->
     <param name="trajectory_file" value="$(find traj_mpc)/trajectories/example_trajectory.xml" />
+    
+    <!-- PX4 OFFBOARD Control Parameters -->
+    <param name="command_timeout" value="1.0" />
   </node>
 </launch>

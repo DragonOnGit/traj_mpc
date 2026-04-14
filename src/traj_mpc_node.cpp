@@ -1,5 +1,12 @@
 #include <ros/ros.h>
 #include <nav_msgs/Odometry.h>
+#include <mavros_msgs/State.h>
+#include <mavros_msgs/SetMode.h>
+#include <mavros_msgs/CommandBool.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/TwistStamped.h>
+#include <sensor_msgs/BatteryState.h>
+#include <sensor_msgs/Imu.h>
 #include <traj_mpc/mpc_controller.h>
 #include <traj_mpc/trajectory_loader.h>
 #include <ros/package.h>
@@ -9,20 +16,64 @@ namespace traj_mpc {
 class TrajMPCNode {
 private:
   ros::NodeHandle nh_;
-  ros::Subscriber odom_sub_;
-  ros::Timer control_timer_;
   
+  // Subscribers
+  ros::Subscriber odom_sub_;
+  ros::Subscriber state_sub_;
+  ros::Subscriber battery_sub_;
+  ros::Subscriber imu_sub_;
+  
+  // Publishers
+  ros::Publisher setpoint_pos_pub_;
+  ros::Publisher setpoint_vel_pub_;
+  
+  // Service clients
+  ros::ServiceClient set_mode_client_;
+  ros::ServiceClient arming_client_;
+  
+  // Timers
+  ros::Timer control_timer_;
+  ros::Timer offboard_timer_;
+  
+  // Controllers and loaders
   MPCController mpc_controller_;
   TrajectoryLoader trajectory_loader_;
   
+  // Parameters
   std::string odom_topic_;
   std::string trajectory_file_;
+  
+  // PX4 state
+  mavros_msgs::State current_state_;
+  sensor_msgs::BatteryState battery_state_;
+  sensor_msgs::Imu imu_data_;
+  nav_msgs::Odometry current_odom_;
+  
+  // Control state
+  bool offboard_active_ = false;
+  ros::Time last_command_time_;
+  double command_timeout_ = 1.0; // seconds
+  
+  // Control setpoints
+  geometry_msgs::PoseStamped target_pose_;
+  geometry_msgs::TwistStamped target_velocity_;
+  
+  // Callbacks
+  void stateCallback(const mavros_msgs::State::ConstPtr& msg);
+  void batteryCallback(const sensor_msgs::BatteryState::ConstPtr& msg);
+  void imuCallback(const sensor_msgs::Imu::ConstPtr& msg);
+  
+  // PX4 control methods
+  bool setOffboardMode();
+  bool armVehicle();
+  void publishOffboardSetpoints();
   
 public:
   TrajMPCNode() : mpc_controller_(nh_) {
     // Get parameters
-    nh_.param("odom_topic", odom_topic_, std::string("/Odometry"));
+    nh_.param("odom_topic", odom_topic_, std::string("/mavros/local_position/odom"));
     nh_.param("trajectory_file", trajectory_file_, std::string("trajectories/example_trajectory.xml"));
+    nh_.param("command_timeout", command_timeout_, 1.0);
     
     // Convert to absolute path using package path
     if (trajectory_file_.find("/") != 0) { // If not absolute path
@@ -37,19 +88,109 @@ public:
       return;
     }
     
-    // Subscribe to odometry
+    // Subscribers
     odom_sub_ = nh_.subscribe(odom_topic_, 10, &TrajMPCNode::odomCallback, this);
+    state_sub_ = nh_.subscribe("/mavros/state", 10, &TrajMPCNode::stateCallback, this);
+    battery_sub_ = nh_.subscribe("/mavros/battery", 10, &TrajMPCNode::batteryCallback, this);
+    imu_sub_ = nh_.subscribe("/mavros/imu/data", 10, &TrajMPCNode::imuCallback, this);
     
-    // Create control timer
+    // Publishers
+    setpoint_pos_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local", 10);
+    setpoint_vel_pub_ = nh_.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel_unstamped", 10);
+    
+    // Service clients
+    set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
+    arming_client_ = nh_.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");
+    
+    // Timers
     double control_rate;
     nh_.param("control_rate", control_rate, 10.0);
     control_timer_ = nh_.createTimer(ros::Duration(1.0 / control_rate), &TrajMPCNode::controlCallback, this);
+    
+    // Offboard setpoint timer (at least 2Hz as required by PX4)
+    offboard_timer_ = nh_.createTimer(ros::Duration(0.5), &TrajMPCNode::publishOffboardSetpoints, this);
+    
+    // Initialize target pose
+    target_pose_.pose.position.z = 1.0; // Start at 1m height
     
     ROS_INFO("Traj MPC Node initialized");
   }
   
   void odomCallback(const nav_msgs::Odometry::ConstPtr& odom) {
+    current_odom_ = *odom;
     mpc_controller_.updateState(odom);
+  }
+  
+  void stateCallback(const mavros_msgs::State::ConstPtr& msg) {
+    current_state_ = *msg;
+    
+    // Log state changes
+    static mavros_msgs::State last_state;
+    if (current_state_.mode != last_state.mode) {
+      ROS_INFO("Mode changed: %s -> %s", last_state.mode.c_str(), current_state_.mode.c_str());
+    }
+    if (current_state_.armed != last_state.armed) {
+      ROS_INFO("Arming state changed: %s -> %s", last_state.armed ? "armed" : "disarmed", current_state_.armed ? "armed" : "disarmed");
+    }
+    last_state = current_state_;
+  }
+  
+  void batteryCallback(const sensor_msgs::BatteryState::ConstPtr& msg) {
+    battery_state_ = *msg;
+    
+    // Check battery level
+    if (battery_state_.percentage < 0.2) {
+      ROS_WARN("Low battery: %.2f%%", battery_state_.percentage * 100.0);
+    }
+  }
+  
+  void imuCallback(const sensor_msgs::Imu::ConstPtr& msg) {
+    imu_data_ = *msg;
+  }
+  
+  bool setOffboardMode() {
+    mavros_msgs::SetMode set_mode_srv;
+    set_mode_srv.request.custom_mode = "OFFBOARD";
+    
+    if (set_mode_client_.call(set_mode_srv) && set_mode_srv.response.mode_sent) {
+      ROS_INFO("Offboard mode enabled");
+      offboard_active_ = true;
+      return true;
+    } else {
+      ROS_ERROR("Failed to set offboard mode");
+      return false;
+    }
+  }
+  
+  bool armVehicle() {
+    mavros_msgs::CommandBool arm_srv;
+    arm_srv.request.value = true;
+    
+    if (arming_client_.call(arm_srv) && arm_srv.response.success) {
+      ROS_INFO("Vehicle armed");
+      return true;
+    } else {
+      ROS_ERROR("Failed to arm vehicle");
+      return false;
+    }
+  }
+  
+  void publishOffboardSetpoints() {
+    // Check if offboard mode is active
+    if (!offboard_active_) {
+      return;
+    }
+    
+    // Check command timeout
+    if (ros::Time::now() - last_command_time_ > ros::Duration(command_timeout_)) {
+      ROS_WARN("Command timeout, sending hold position");
+      // Send current position as setpoint to hold position
+      target_pose_.pose = current_odom_.pose.pose;
+    }
+    
+    // Publish position setpoint
+    target_pose_.header.stamp = ros::Time::now();
+    setpoint_pos_pub_.publish(target_pose_);
   }
   
   void controlCallback(const ros::TimerEvent& event) {
@@ -62,8 +203,19 @@ public:
     Eigen::MatrixXd ref = trajectory_loader_.generateReferenceTrajectory(dt, horizon);
     mpc_controller_.updateReference(ref);
     
-    // Compute and publish control
+    // Compute control
     mpc_controller_.computeControl();
+    
+    // Update target pose based on MPC output
+    // For simplicity, we'll use the first reference point as target
+    if (ref.cols() > 0) {
+      target_pose_.pose.position.x = ref(0, 0);
+      target_pose_.pose.position.y = ref(1, 0);
+      target_pose_.pose.position.z = ref(2, 0);
+    }
+    
+    // Update last command time
+    last_command_time_ = ros::Time::now();
   }
 };
 
