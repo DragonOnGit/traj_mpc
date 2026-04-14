@@ -50,13 +50,32 @@ private:
   nav_msgs::Odometry current_odom_;
   
   // Control state
+  enum ControlState {
+    STATE_IDLE,
+    STATE_OFFBOARD_SETUP,
+    STATE_ARMING,
+    STATE_TAKEOFF,
+    STATE_HOVERING,
+    STATE_TRAJECTORY_TRACKING
+  } control_state_ = STATE_IDLE;
+  
   bool offboard_active_ = false;
+  bool armed_ = false;
   ros::Time last_command_time_;
   double command_timeout_ = 1.0; // seconds
   
   // Control setpoints
   geometry_msgs::PoseStamped target_pose_;
   geometry_msgs::Twist target_velocity_;
+  
+  // Takeoff parameters
+  double takeoff_height_ = 1.0; // meters
+  double takeoff_timeout_ = 10.0; // seconds
+  ros::Time takeoff_start_time_;
+  
+  // Hover parameters
+  double hover_duration_ = 2.0; // seconds
+  ros::Time hover_start_time_;
   
 
   
@@ -115,6 +134,10 @@ public:
   
   void stateCallback(const mavros_msgs::State::ConstPtr& msg) {
     current_state_ = *msg;
+    
+    // Update local state variables
+    offboard_active_ = (current_state_.mode == "OFFBOARD");
+    armed_ = current_state_.armed;
     
     // Log state changes
     static mavros_msgs::State last_state;
@@ -186,28 +209,118 @@ public:
   }
   
   void controlCallback(const ros::TimerEvent& event) {
-    // Generate reference trajectory
-    double dt;
-    int horizon;
-    nh_.param("dt", dt, 0.1);
-    nh_.param("horizon", horizon, 10);
-    
-    Eigen::MatrixXd ref = trajectory_loader_.generateReferenceTrajectory(dt, horizon);
-    mpc_controller_.updateReference(ref);
-    
-    // Compute control
-    mpc_controller_.computeControl();
-    
-    // Update target pose based on MPC output
-    // For simplicity, we'll use the first reference point as target
-    if (ref.cols() > 0) {
-      target_pose_.pose.position.x = ref(0, 0);
-      target_pose_.pose.position.y = ref(1, 0);
-      target_pose_.pose.position.z = ref(2, 0);
-    }
-    
     // Update last command time
     last_command_time_ = ros::Time::now();
+    
+    // State machine for control flow
+    switch (control_state_) {
+      case STATE_IDLE:
+        // Start the control sequence
+        ROS_INFO("Starting control sequence...");
+        control_state_ = STATE_OFFBOARD_SETUP;
+        break;
+        
+      case STATE_OFFBOARD_SETUP:
+        // Set offboard mode
+        if (!offboard_active_) {
+          if (setOffboardMode()) {
+            ROS_INFO("Offboard mode set successfully, waiting for mode confirmation...");
+          } else {
+            ROS_WARN("Failed to set offboard mode, retrying...");
+          }
+        } else {
+          // Offboard mode confirmed
+          ROS_INFO("Offboard mode confirmed, proceeding to arming...");
+          control_state_ = STATE_ARMING;
+        }
+        break;
+        
+      case STATE_ARMING:
+        // Arm the vehicle
+        if (!armed_) {
+          if (armVehicle()) {
+            ROS_INFO("Vehicle armed successfully, waiting for arm confirmation...");
+          } else {
+            ROS_WARN("Failed to arm vehicle, retrying...");
+          }
+        } else {
+          // Arming confirmed
+          ROS_INFO("Vehicle armed, proceeding to takeoff...");
+          // Set takeoff target position
+          target_pose_.pose.position.x = current_odom_.pose.pose.position.x;
+          target_pose_.pose.position.y = current_odom_.pose.pose.position.y;
+          target_pose_.pose.position.z = takeoff_height_;
+          target_pose_.pose.orientation = current_odom_.pose.pose.orientation;
+          
+          takeoff_start_time_ = ros::Time::now();
+          control_state_ = STATE_TAKEOFF;
+        }
+        break;
+        
+      case STATE_TAKEOFF:
+        // Check if reached takeoff height
+        double current_height = current_odom_.pose.pose.position.z;
+        double height_error = fabs(current_height - takeoff_height_);
+        
+        if (height_error < 0.1) {
+          // Reached takeoff height
+          ROS_INFO("Reached takeoff height (%.2f m), proceeding to hover...", current_height);
+          hover_start_time_ = ros::Time::now();
+          control_state_ = STATE_HOVERING;
+        } else if (ros::Time::now() - takeoff_start_time_ > ros::Duration(takeoff_timeout_)) {
+          // Takeoff timeout
+          ROS_ERROR("Takeoff timeout, proceeding to hover...");
+          hover_start_time_ = ros::Time::now();
+          control_state_ = STATE_HOVERING;
+        } else {
+          // Continue takeoff
+          ROS_INFO_THROTTLE(1.0, "Taking off: current height = %.2f m, target = %.2f m, error = %.2f m", 
+                          current_height, takeoff_height_, height_error);
+        }
+        break;
+        
+      case STATE_HOVERING:
+        // Hover for specified duration
+        if (ros::Time::now() - hover_start_time_ > ros::Duration(hover_duration_)) {
+          // Hover complete, start trajectory tracking
+          ROS_INFO("Hover complete, starting trajectory tracking...");
+          control_state_ = STATE_TRAJECTORY_TRACKING;
+        } else {
+          // Continue hovering
+          ROS_INFO_THROTTLE(1.0, "Hovering...");
+        }
+        break;
+        
+      case STATE_TRAJECTORY_TRACKING:
+        // Generate reference trajectory
+        double dt;
+        int horizon;
+        nh_.param("dt", dt, 0.1);
+        nh_.param("horizon", horizon, 10);
+        
+        Eigen::MatrixXd ref = trajectory_loader_.generateReferenceTrajectory(dt, horizon);
+        mpc_controller_.updateReference(ref);
+        
+        // Compute control
+        mpc_controller_.computeControl();
+        
+        // Update target pose based on MPC output
+        // For simplicity, we'll use the first reference point as target
+        if (ref.cols() > 0) {
+          target_pose_.pose.position.x = ref(0, 0);
+          target_pose_.pose.position.y = ref(1, 0);
+          target_pose_.pose.position.z = ref(2, 0);
+        }
+        
+        // Log tracking error
+        double x_error = fabs(target_pose_.pose.position.x - current_odom_.pose.pose.position.x);
+        double y_error = fabs(target_pose_.pose.position.y - current_odom_.pose.pose.position.y);
+        double z_error = fabs(target_pose_.pose.position.z - current_odom_.pose.pose.position.z);
+        double max_error = std::max({x_error, y_error, z_error});
+        
+        ROS_INFO_THROTTLE(1.0, "Trajectory tracking: position error = %.3f m", max_error);
+        break;
+    }
   }
 };
 
