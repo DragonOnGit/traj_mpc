@@ -1,5 +1,5 @@
 #include <traj_mpc/trajectory_loader.h>
-#include <tinyxml/tinyxml.h>
+#include <tinyxml2.h>
 #include <iostream>
 
 namespace traj_mpc {
@@ -9,13 +9,13 @@ TrajectoryLoader::TrajectoryLoader() {}
 TrajectoryLoader::~TrajectoryLoader() {}
 
 bool TrajectoryLoader::loadFromXml(const std::string& file_path) {
-  TiXmlDocument doc(file_path.c_str());
-  if (!doc.LoadFile()) {
+  tinyxml2::XMLDocument doc;
+  if (doc.LoadFile(file_path.c_str()) != tinyxml2::XML_SUCCESS) {
     std::cerr << "Failed to load trajectory file: " << file_path << std::endl;
     return false;
   }
   
-  TiXmlElement* root = doc.FirstChildElement("trajectory");
+  tinyxml2::XMLElement* root = doc.FirstChildElement("trajectory");
   if (!root) {
     std::cerr << "Invalid trajectory file format" << std::endl;
     return false;
@@ -23,53 +23,39 @@ bool TrajectoryLoader::loadFromXml(const std::string& file_path) {
   
   waypoints_.clear();
   
-  for (TiXmlElement* point_elem = root->FirstChildElement("point"); 
+  for (tinyxml2::XMLElement* point_elem = root->FirstChildElement("point"); 
        point_elem; 
        point_elem = point_elem->NextSiblingElement("point")) {
     Waypoint wp;
     
     // Read position
-    if (point_elem->Attribute("x")) {
-      wp.x = atof(point_elem->Attribute("x"));
-    } else {
+    if (point_elem->QueryDoubleAttribute("x", &wp.x) != tinyxml2::XML_SUCCESS) {
       std::cerr << "Missing x attribute in point" << std::endl;
       return false;
     }
-    if (point_elem->Attribute("y")) {
-      wp.y = atof(point_elem->Attribute("y"));
-    } else {
+    if (point_elem->QueryDoubleAttribute("y", &wp.y) != tinyxml2::XML_SUCCESS) {
       std::cerr << "Missing y attribute in point" << std::endl;
       return false;
     }
-    if (point_elem->Attribute("z")) {
-      wp.z = atof(point_elem->Attribute("z"));
-    } else {
+    if (point_elem->QueryDoubleAttribute("z", &wp.z) != tinyxml2::XML_SUCCESS) {
       std::cerr << "Missing z attribute in point" << std::endl;
       return false;
     }
     
     // Read orientation quaternion
-    if (point_elem->Attribute("qx")) {
-      wp.qx = atof(point_elem->Attribute("qx"));
-    } else {
+    if (point_elem->QueryDoubleAttribute("qx", &wp.qx) != tinyxml2::XML_SUCCESS) {
       std::cerr << "Missing qx attribute in point" << std::endl;
       return false;
     }
-    if (point_elem->Attribute("qy")) {
-      wp.qy = atof(point_elem->Attribute("qy"));
-    } else {
+    if (point_elem->QueryDoubleAttribute("qy", &wp.qy) != tinyxml2::XML_SUCCESS) {
       std::cerr << "Missing qy attribute in point" << std::endl;
       return false;
     }
-    if (point_elem->Attribute("qz")) {
-      wp.qz = atof(point_elem->Attribute("qz"));
-    } else {
+    if (point_elem->QueryDoubleAttribute("qz", &wp.qz) != tinyxml2::XML_SUCCESS) {
       std::cerr << "Missing qz attribute in point" << std::endl;
       return false;
     }
-    if (point_elem->Attribute("qw")) {
-      wp.qw = atof(point_elem->Attribute("qw"));
-    } else {
+    if (point_elem->QueryDoubleAttribute("qw", &wp.qw) != tinyxml2::XML_SUCCESS) {
       std::cerr << "Missing qw attribute in point" << std::endl;
       return false;
     }
