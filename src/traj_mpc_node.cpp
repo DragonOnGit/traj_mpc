@@ -121,8 +121,12 @@ public:
     // Offboard setpoint timer (at least 2Hz as required by PX4)
     offboard_timer_ = nh_.createTimer(ros::Duration(0.5), &TrajMPCNode::publishOffboardSetpoints, this);
     
-    // Initialize target pose
-    target_pose_.pose.position.z = 1.0; // Start at 1m height
+    // Initialize target pose with current position
+    target_pose_.header.frame_id = "map";
+    target_pose_.pose.position.x = 0.0;
+    target_pose_.pose.position.y = 0.0;
+    target_pose_.pose.position.z = 0.0;
+    target_pose_.pose.orientation.w = 1.0;
     
     ROS_INFO("Traj MPC Node initialized");
   }
@@ -191,10 +195,8 @@ public:
   }
   
   void publishOffboardSetpoints(const ros::TimerEvent& event) {
-    // Check if offboard mode is active
-    if (!offboard_active_) {
-      return;
-    }
+    // Always publish setpoints, even before offboard mode is active
+    // This is required by PX4 to maintain offboard mode
     
     // Check command timeout
     if (ros::Time::now() - last_command_time_ > ros::Duration(command_timeout_)) {
@@ -261,6 +263,12 @@ public:
         // Check if reached takeoff height
         double current_height = current_odom_.pose.pose.position.z;
         double height_error = fabs(current_height - takeoff_height_);
+        
+        // Update target pose to current position with target height
+        target_pose_.pose.position.x = current_odom_.pose.pose.position.x;
+        target_pose_.pose.position.y = current_odom_.pose.pose.position.y;
+        target_pose_.pose.position.z = takeoff_height_;
+        target_pose_.pose.orientation = current_odom_.pose.pose.orientation;
         
         if (height_error < 0.1) {
           // Reached takeoff height
