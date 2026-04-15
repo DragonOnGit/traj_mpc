@@ -320,13 +320,16 @@ public:
           target_pose_.pose.position.z = ref(2, 0);
         }
         
+        // Update trajectory time
+        trajectory_loader_.updateTrajectoryTime(dt);
+        
         // Log tracking error
         double x_error = fabs(target_pose_.pose.position.x - current_odom_.pose.pose.position.x);
         double y_error = fabs(target_pose_.pose.position.y - current_odom_.pose.pose.position.y);
         double z_error = fabs(target_pose_.pose.position.z - current_odom_.pose.pose.position.z);
         double max_error = std::max({x_error, y_error, z_error});
         
-        ROS_INFO_THROTTLE(1.0, "Trajectory tracking: position error = %.3f m", max_error);
+        ROS_INFO_THROTTLE(1.0, "Trajectory tracking: position error = %.3f m, current time = %.2f s", max_error, trajectory_loader_.getCurrentTime());
         break;
       }
     }

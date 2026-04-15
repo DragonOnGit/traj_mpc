@@ -80,7 +80,7 @@ Eigen::MatrixXd TrajectoryLoader::generateReferenceTrajectory(double dt, int hor
   
   // Simple linear interpolation between waypoints
   for (int i = 0; i < horizon; i++) {
-    double t = i * dt;
+    double t = current_time_ + i * dt;
     double total_time = (waypoints_.size() - 1) * 1.0; // Assume 1 second per waypoint
     
     if (t >= total_time) {
@@ -110,6 +110,14 @@ Eigen::MatrixXd TrajectoryLoader::generateReferenceTrajectory(double dt, int hor
   }
   
   return ref;
+}
+
+void TrajectoryLoader::resetTrajectoryTime() {
+  current_time_ = 0.0;
+}
+
+void TrajectoryLoader::updateTrajectoryTime(double dt) {
+  current_time_ += dt;
 }
 
 } // namespace traj_mpc

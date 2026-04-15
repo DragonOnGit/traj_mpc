@@ -15,6 +15,7 @@ struct Waypoint {
 class TrajectoryLoader {
 private:
   std::vector<Waypoint> waypoints_;
+  double current_time_ = 0.0;
   
 public:
   TrajectoryLoader();
@@ -25,6 +26,15 @@ public:
   
   // Generate reference trajectory for MPC
   Eigen::MatrixXd generateReferenceTrajectory(double dt, int horizon);
+  
+  // Reset trajectory time
+  void resetTrajectoryTime();
+  
+  // Update trajectory time
+  void updateTrajectoryTime(double dt);
+  
+  // Get current trajectory time
+  double getCurrentTime() const { return current_time_; }
   
   // Get waypoints
   const std::vector<Waypoint>& getWaypoints() const { return waypoints_; }
