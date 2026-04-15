@@ -214,13 +214,13 @@ public:
     
     // State machine for control flow
     switch (control_state_) {
-      case STATE_IDLE:
+      case STATE_IDLE: {
         // Start the control sequence
         ROS_INFO("Starting control sequence...");
         control_state_ = STATE_OFFBOARD_SETUP;
         break;
-        
-      case STATE_OFFBOARD_SETUP:
+      }
+      case STATE_OFFBOARD_SETUP: {
         // Set offboard mode
         if (!offboard_active_) {
           if (setOffboardMode()) {
@@ -234,8 +234,8 @@ public:
           control_state_ = STATE_ARMING;
         }
         break;
-        
-      case STATE_ARMING:
+      }
+      case STATE_ARMING: {
         // Arm the vehicle
         if (!armed_) {
           if (armVehicle()) {
@@ -256,8 +256,8 @@ public:
           control_state_ = STATE_TAKEOFF;
         }
         break;
-        
-      case STATE_TAKEOFF:
+      }
+      case STATE_TAKEOFF: {
         // Check if reached takeoff height
         double current_height = current_odom_.pose.pose.position.z;
         double height_error = fabs(current_height - takeoff_height_);
@@ -278,8 +278,8 @@ public:
                           current_height, takeoff_height_, height_error);
         }
         break;
-        
-      case STATE_HOVERING:
+      }
+      case STATE_HOVERING: {
         // Hover for specified duration
         if (ros::Time::now() - hover_start_time_ > ros::Duration(hover_duration_)) {
           // Hover complete, start trajectory tracking
@@ -290,8 +290,8 @@ public:
           ROS_INFO_THROTTLE(1.0, "Hovering...");
         }
         break;
-        
-      case STATE_TRAJECTORY_TRACKING:
+      }
+      case STATE_TRAJECTORY_TRACKING: {
         // Generate reference trajectory
         double dt;
         int horizon;
@@ -320,6 +320,7 @@ public:
         
         ROS_INFO_THROTTLE(1.0, "Trajectory tracking: position error = %.3f m", max_error);
         break;
+      }
     }
   }
 };
