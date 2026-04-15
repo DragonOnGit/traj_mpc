@@ -119,7 +119,7 @@ public:
     control_timer_ = nh_.createTimer(ros::Duration(1.0 / control_rate), &TrajMPCNode::controlCallback, this);
     
     // Offboard setpoint timer (at least 2Hz as required by PX4)
-    offboard_timer_ = nh_.createTimer(ros::Duration(0.5), &TrajMPCNode::publishOffboardSetpoints, this);
+    offboard_timer_ = nh_.createTimer(ros::Duration(0.05), &TrajMPCNode::publishOffboardSetpoints, this);
     
     // Initialize target pose with current position
     target_pose_.header.frame_id = "map";
