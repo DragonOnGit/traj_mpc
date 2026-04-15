@@ -99,6 +99,15 @@ public:
       return;
     }
     
+    // Output trajectory information
+    auto waypoints = trajectory_loader_.getWaypoints();
+    ROS_INFO("Successfully loaded trajectory with %zu waypoints:", waypoints.size());
+    for (size_t i = 0; i < waypoints.size(); i++) {
+      ROS_INFO("Waypoint %zu: x=%.2f, y=%.2f, z=%.2f, qx=%.2f, qy=%.2f, qz=%.2f, qw=%.2f",
+               i+1, waypoints[i].x, waypoints[i].y, waypoints[i].z,
+               waypoints[i].qx, waypoints[i].qy, waypoints[i].qz, waypoints[i].qw);
+    }
+    
     // Subscribers
     odom_sub_ = nh_.subscribe(odom_topic_, 10, &TrajMPCNode::odomCallback, this);
     state_sub_ = nh_.subscribe("/mavros/state", 10, &TrajMPCNode::stateCallback, this);
