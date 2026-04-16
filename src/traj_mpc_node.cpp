@@ -233,16 +233,46 @@ public:
       }
       case STATE_OFFBOARD_SETUP: {
         // Set offboard mode
+        static ros::Time start_time = ros::Time::now();
+        static int set_mode_attempts = 0;
+        const int MAX_ATTEMPTS = 5;
+        const double TIMEOUT = 10.0; // seconds
+        
+        // Wait a bit before first attempt to ensure setpoints are being published
+        if (ros::Time::now() - start_time < ros::Duration(2.0)) {
+          ROS_INFO_THROTTLE(1.0, "Waiting for setpoints to be published before switching to offboard mode...");
+          break;
+        }
+        
         if (!offboard_active_) {
-          if (setOffboardMode()) {
-            ROS_INFO("Offboard mode set successfully, waiting for mode confirmation...");
+          if (set_mode_attempts < MAX_ATTEMPTS) {
+            if (setOffboardMode()) {
+              ROS_INFO("Offboard mode set requested, waiting for confirmation... (Attempt %d/%d)", 
+                      set_mode_attempts + 1, MAX_ATTEMPTS);
+              set_mode_attempts++;
+            } else {
+              ROS_WARN("Failed to request offboard mode, retrying... (Attempt %d/%d)", 
+                      set_mode_attempts + 1, MAX_ATTEMPTS);
+              set_mode_attempts++;
+            }
           } else {
-            ROS_WARN("Failed to set offboard mode, retrying...");
+            // Max attempts reached
+            ROS_ERROR("Failed to switch to offboard mode after %d attempts, timeout after %.1f seconds", 
+                     MAX_ATTEMPTS, TIMEOUT);
+            ros::shutdown();
+            return;
           }
         } else {
           // Offboard mode confirmed
           ROS_INFO("Offboard mode confirmed, proceeding to arming...");
           control_state_ = STATE_ARMING;
+        }
+        
+        // Check for timeout
+        if (ros::Time::now() - start_time > ros::Duration(TIMEOUT)) {
+          ROS_ERROR("Timeout waiting for offboard mode confirmation after %.1f seconds", TIMEOUT);
+          ros::shutdown();
+          return;
         }
         break;
       }
@@ -315,6 +345,12 @@ public:
         nh_.param("dt", dt, 0.1);
         nh_.param("horizon", horizon, 10);
         
+        // Get current position and target position
+        double current_x = current_odom_.pose.pose.position.x;
+        double current_y = current_odom_.pose.pose.position.y;
+        double current_z = current_odom_.pose.pose.position.z;
+        
+        // Generate reference trajectory
         Eigen::MatrixXd ref = trajectory_loader_.generateReferenceTrajectory(dt, horizon);
         mpc_controller_.updateReference(ref);
         
@@ -324,21 +360,30 @@ public:
         // Update target pose based on MPC output
         // For simplicity, we'll use the first reference point as target
         if (ref.cols() > 0) {
-          target_pose_.pose.position.x = ref(0, 0);
-          target_pose_.pose.position.y = ref(1, 0);
-          target_pose_.pose.position.z = ref(2, 0);
+          // Calculate error between current position and target
+          double target_x = ref(0, 0);
+          double target_y = ref(1, 0);
+          double target_z = ref(2, 0);
+          
+          double x_error = fabs(target_x - current_x);
+          double y_error = fabs(target_y - current_y);
+          double z_error = fabs(target_z - current_z);
+          double max_error = std::max({x_error, y_error, z_error});
+          
+          // Only update trajectory time if we're close to the target
+          // This helps the drone stabilize at each waypoint
+          if (max_error < 0.2) { // 20cm threshold
+            trajectory_loader_.updateTrajectoryTime(dt);
+            ROS_INFO_THROTTLE(1.0, "Approaching target: position error = %.3f m, current time = %.2f s", max_error, trajectory_loader_.getCurrentTime());
+          } else {
+            ROS_INFO_THROTTLE(1.0, "Moving to target: position error = %.3f m, current time = %.2f s", max_error, trajectory_loader_.getCurrentTime());
+          }
+          
+          // Update target pose
+          target_pose_.pose.position.x = target_x;
+          target_pose_.pose.position.y = target_y;
+          target_pose_.pose.position.z = target_z;
         }
-        
-        // Update trajectory time
-        trajectory_loader_.updateTrajectoryTime(dt);
-        
-        // Log tracking error
-        double x_error = fabs(target_pose_.pose.position.x - current_odom_.pose.pose.position.x);
-        double y_error = fabs(target_pose_.pose.position.y - current_odom_.pose.pose.position.y);
-        double z_error = fabs(target_pose_.pose.position.z - current_odom_.pose.pose.position.z);
-        double max_error = std::max({x_error, y_error, z_error});
-        
-        ROS_INFO_THROTTLE(1.0, "Trajectory tracking: position error = %.3f m, current time = %.2f s", max_error, trajectory_loader_.getCurrentTime());
         break;
       }
     }

@@ -18,8 +18,8 @@ MPCController::MPCController(ros::NodeHandle& nh) {
   // Initialize reference trajectory
   reference_trajectory_ = Eigen::MatrixXd::Zero(6, horizon_);
   
-  // Initialize publisher
-  cmd_vel_pub_ = nh.advertise<geometry_msgs::TwistStamped>("/cmd_vel", 10);
+  // Initialize publisher for OFFBOARD mode
+  cmd_vel_pub_ = nh.advertise<geometry_msgs::Twist>("/mavros/setpoint_velocity/cmd_vel_unstamped", 10);
 }
 
 MPCController::~MPCController() {}
@@ -70,11 +70,10 @@ void MPCController::computeControl() {
   Eigen::VectorXd desired_vel = solveMPC();
   
   // Publish control command
-  geometry_msgs::TwistStamped cmd_vel;
-  cmd_vel.header.stamp = ros::Time::now();
-  cmd_vel.twist.linear.x = desired_vel(0);
-  cmd_vel.twist.linear.y = desired_vel(1);
-  cmd_vel.twist.linear.z = desired_vel(2);
+  geometry_msgs::Twist cmd_vel;
+  cmd_vel.linear.x = desired_vel(0);
+  cmd_vel.linear.y = desired_vel(1);
+  cmd_vel.linear.z = desired_vel(2);
   
   cmd_vel_pub_.publish(cmd_vel);
 }
