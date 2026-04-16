@@ -50,14 +50,7 @@ private:
   nav_msgs::Odometry current_odom_;
   
   // Control state
-  enum ControlState {
-    STATE_IDLE,
-    STATE_OFFBOARD_SETUP,
-    STATE_ARMING,
-    STATE_TAKEOFF,
-    STATE_HOVERING,
-    STATE_TRAJECTORY_TRACKING
-  } control_state_ = STATE_IDLE;
+  enum ControlState { STATE_IDLE, STATE_OFFBOARD_SETUP, STATE_ARMING, STATE_TAKEOFF, STATE_HOVERING, STATE_TRAJECTORY_TRACKING, STATE_LANDING } control_state_ = STATE_IDLE;
   
   bool offboard_active_ = false;
   bool armed_ = false;
@@ -370,6 +363,22 @@ public:
           double z_error = fabs(target_z - current_z);
           double max_error = std::max({x_error, y_error, z_error});
           
+          // Check if trajectory is complete (reached last waypoint and error is small)
+          auto waypoints = trajectory_loader_.getWaypoints();
+          if (!waypoints.empty()) {
+            Waypoint last_waypoint = waypoints.back();
+            double last_x_error = fabs(last_waypoint.x - current_x);
+            double last_y_error = fabs(last_waypoint.y - current_y);
+            double last_z_error = fabs(last_waypoint.z - current_z);
+            double last_max_error = std::max({last_x_error, last_y_error, last_z_error});
+            
+            if (last_max_error < 0.3) { // 30cm threshold for landing
+              ROS_INFO("Trajectory completed successfully! Starting landing sequence...");
+              control_state_ = STATE_LANDING;
+              break;
+            }
+          }
+          
           // Only update trajectory time if we're close to the target
           // This helps the drone stabilize at each waypoint
           if (max_error < 0.2) { // 20cm threshold
@@ -383,6 +392,39 @@ public:
           target_pose_.pose.position.x = target_x;
           target_pose_.pose.position.y = target_y;
           target_pose_.pose.position.z = target_z;
+        }
+        break;
+      }
+      case STATE_LANDING: {
+        // Landing logic
+        double current_z = current_odom_.pose.pose.position.z;
+        double landing_altitude = 0.1; // Land at 0.1m height
+        
+        if (current_z > landing_altitude) {
+          // Descend slowly
+          geometry_msgs::Twist cmd_vel;
+          cmd_vel.linear.x = 0.0;
+          cmd_vel.linear.y = 0.0;
+          cmd_vel.linear.z = -0.2; // 0.2 m/s descent rate
+          cmd_vel_pub_.publish(cmd_vel);
+          
+          ROS_INFO_THROTTLE(1.0, "Landing: current altitude = %.2f m, descending...", current_z);
+        } else {
+          // Landing complete
+          ROS_INFO("Landing completed successfully! Disarming vehicle...");
+          
+          // Disarm the vehicle
+          mavros_msgs::CommandBool arm_cmd;
+          arm_cmd.request.value = false;
+          if (arming_client_.call(arm_cmd) && arm_cmd.response.success) {
+            ROS_INFO("Vehicle disarmed successfully");
+          } else {
+            ROS_WARN("Failed to disarm vehicle");
+          }
+          
+          // Shutdown node
+          ros::shutdown();
+          return;
         }
         break;
       }
