@@ -380,19 +380,28 @@ public:
             // Check if we've been tracking for a while (not just starting)
             double current_time = trajectory_loader_.getCurrentTime();
             
-            // Only trigger landing if we're close to last waypoint and have been tracking for at least 2 seconds
-            if (last_max_error < 0.3 && current_time > 2.0) { // 30cm threshold for landing, 2s minimum tracking time
+            // Calculate expected total trajectory time based on waypoints
+            double expected_total_time = (waypoints.size() - 1) * 1.0; // 1 second per waypoint
+            
+            // Only trigger landing if:
+            // 1. We're close to last waypoint (error < 0.3m)
+            // 2. We've been tracking for at least 80% of expected trajectory time
+            // 3. We've been tracking for at least 3 seconds (minimum time)
+            if (last_max_error < 0.3 && current_time > std::max(expected_total_time * 0.8, 3.0)) {
               ROS_INFO("Trajectory completed successfully! Starting landing sequence...");
-              ROS_INFO("Last waypoint error: %.3f m, tracking time: %.2f s", last_max_error, current_time);
+              ROS_INFO("Last waypoint error: %.3f m, tracking time: %.2f s, expected total time: %.2f s", 
+                       last_max_error, current_time, expected_total_time);
               control_state_ = STATE_LANDING;
               break;
             }
           }
           
-          // Only update trajectory time if we're close to the target
-          // This helps the drone stabilize at each waypoint
+          // Always update trajectory time to ensure progress
+          // This ensures we move through the trajectory even if there's some error
+          trajectory_loader_.updateTrajectoryTime(dt);
+          
+          // Log tracking status
           if (max_error < 0.2) { // 20cm threshold
-            trajectory_loader_.updateTrajectoryTime(dt);
             ROS_INFO_THROTTLE(1.0, "Approaching target: position error = %.3f m, current time = %.2f s", max_error, trajectory_loader_.getCurrentTime());
           } else {
             ROS_INFO_THROTTLE(1.0, "Moving to target: position error = %.3f m, current time = %.2f s", max_error, trajectory_loader_.getCurrentTime());
@@ -415,15 +424,24 @@ public:
           geometry_msgs::Twist cmd_vel;
           cmd_vel.linear.x = 0.0;
           cmd_vel.linear.y = 0.0;
-          cmd_vel.linear.z = -0.3; // 0.3 m/s descent rate (faster than before)
+          cmd_vel.linear.z = -0.4; // 0.4 m/s descent rate (faster)
           
           // Publish the command multiple times to ensure it's received
-          for (int i = 0; i < 3; i++) {
+          for (int i = 0; i < 5; i++) {
             cmd_vel_pub_.publish(cmd_vel);
-            ros::Duration(0.01).sleep(); // Small delay between publishes
+            ros::Duration(0.02).sleep(); // Small delay between publishes
           }
           
-          ROS_INFO("Landing: current altitude = %.2f m, descending at 0.3 m/s", current_z);
+          // Also publish position setpoint to ensure OFFBOARD mode is maintained
+          geometry_msgs::PoseStamped landing_pose;
+          landing_pose.header.stamp = ros::Time::now();
+          landing_pose.pose.position.x = current_odom_.pose.pose.position.x;
+          landing_pose.pose.position.y = current_odom_.pose.pose.position.y;
+          landing_pose.pose.position.z = 0.0; // Land at ground level
+          landing_pose.pose.orientation = current_odom_.pose.pose.orientation;
+          setpoint_pos_pub_.publish(landing_pose);
+          
+          ROS_INFO("Landing: current altitude = %.2f m, descending at 0.4 m/s", current_z);
         } else {
           // Landing complete
           ROS_INFO("Landing completed successfully! Final altitude: %.2f m", current_z);
