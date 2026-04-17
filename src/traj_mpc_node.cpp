@@ -26,6 +26,7 @@ private:
   // Publishers
   ros::Publisher setpoint_pos_pub_;
   ros::Publisher setpoint_vel_pub_;
+  ros::Publisher cmd_vel_pub_;
   
   // Service clients
   ros::ServiceClient set_mode_client_;
@@ -109,7 +110,8 @@ public:
     
     // Publishers
     setpoint_pos_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local", 10);
-    setpoint_vel_pub_ = nh_.advertise<geometry_msgs::Twist>("/mavros/setpoint_velocity/cmd_vel_unstamped", 10);
+    setpoint_vel_pub_ = nh_.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel", 10);
+    cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>("/mavros/setpoint_velocity/cmd_vel_unstamped", 10);
     
     // Service clients
     set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
