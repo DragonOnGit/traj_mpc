@@ -368,14 +368,22 @@ public:
           // Check if trajectory is complete (reached last waypoint and error is small)
           auto waypoints = trajectory_loader_.getWaypoints();
           if (!waypoints.empty()) {
+            // Get last waypoint
             Waypoint last_waypoint = waypoints.back();
+            
+            // Calculate error to last waypoint
             double last_x_error = fabs(last_waypoint.x - current_x);
             double last_y_error = fabs(last_waypoint.y - current_y);
             double last_z_error = fabs(last_waypoint.z - current_z);
             double last_max_error = std::max({last_x_error, last_y_error, last_z_error});
             
-            if (last_max_error < 0.3) { // 30cm threshold for landing
+            // Check if we've been tracking for a while (not just starting)
+            double current_time = trajectory_loader_.getCurrentTime();
+            
+            // Only trigger landing if we're close to last waypoint and have been tracking for at least 2 seconds
+            if (last_max_error < 0.3 && current_time > 2.0) { // 30cm threshold for landing, 2s minimum tracking time
               ROS_INFO("Trajectory completed successfully! Starting landing sequence...");
+              ROS_INFO("Last waypoint error: %.3f m, tracking time: %.2f s", last_max_error, current_time);
               control_state_ = STATE_LANDING;
               break;
             }
@@ -403,17 +411,22 @@ public:
         double landing_altitude = 0.1; // Land at 0.1m height
         
         if (current_z > landing_altitude) {
-          // Descend slowly
+          // Descend at a moderate rate
           geometry_msgs::Twist cmd_vel;
           cmd_vel.linear.x = 0.0;
           cmd_vel.linear.y = 0.0;
-          cmd_vel.linear.z = -0.2; // 0.2 m/s descent rate
-          cmd_vel_pub_.publish(cmd_vel);
+          cmd_vel.linear.z = -0.3; // 0.3 m/s descent rate (faster than before)
           
-          ROS_INFO_THROTTLE(1.0, "Landing: current altitude = %.2f m, descending...", current_z);
+          // Publish the command multiple times to ensure it's received
+          for (int i = 0; i < 3; i++) {
+            cmd_vel_pub_.publish(cmd_vel);
+            ros::Duration(0.01).sleep(); // Small delay between publishes
+          }
+          
+          ROS_INFO("Landing: current altitude = %.2f m, descending at 0.3 m/s", current_z);
         } else {
           // Landing complete
-          ROS_INFO("Landing completed successfully! Disarming vehicle...");
+          ROS_INFO("Landing completed successfully! Final altitude: %.2f m", current_z);
           
           // Disarm the vehicle
           mavros_msgs::CommandBool arm_cmd;
