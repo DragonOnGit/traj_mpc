@@ -71,6 +71,11 @@ private:
   double hover_duration_ = 2.0; // seconds
   ros::Time hover_start_time_;
   
+  // Trajectory tracking parameters
+  size_t current_waypoint_index_ = 0; // Current waypoint index (0 to N-1)
+  double waypoint_reached_threshold_ = 0.3; // meters
+  double landing_error_threshold_ = 0.2; // meters
+  
 
   
 public:
@@ -334,93 +339,77 @@ public:
         break;
       }
       case STATE_TRAJECTORY_TRACKING: {
-        // Generate reference trajectory
-        double dt;
-        int horizon;
-        nh_.param("dt", dt, 0.1);
-        nh_.param("horizon", horizon, 10);
-        
-        // Get current position and target position
+        // Get current position
         double current_x = current_odom_.pose.pose.position.x;
         double current_y = current_odom_.pose.pose.position.y;
         double current_z = current_odom_.pose.pose.position.z;
         
-        // Generate reference trajectory
-        Eigen::MatrixXd ref = trajectory_loader_.generateReferenceTrajectory(dt, horizon);
-        mpc_controller_.updateReference(ref);
+        // Get waypoints
+        auto waypoints = trajectory_loader_.getWaypoints();
+        if (waypoints.empty()) {
+          ROS_ERROR("No waypoints loaded!");
+          break;
+        }
         
-        // Compute control
-        mpc_controller_.computeControl();
+        size_t total_waypoints = waypoints.size();
+        size_t N = total_waypoints; // Total number of waypoints
         
-        // Update target pose based on MPC output
-        // For simplicity, we'll use the first reference point as target
-        if (ref.cols() > 0) {
-          // Calculate error between current position and target
-          double target_x = ref(0, 0);
-          double target_y = ref(1, 0);
-          double target_z = ref(2, 0);
+        // Check if all waypoints are completed
+        if (current_waypoint_index_ >= N) {
+          // All waypoints completed, check landing condition
+          Waypoint last_waypoint = waypoints.back();
+          double last_x_error = fabs(last_waypoint.x - current_x);
+          double last_y_error = fabs(last_waypoint.y - current_y);
+          double last_z_error = fabs(last_waypoint.z - current_z);
+          double last_max_error = std::sqrt(last_x_error * last_x_error + last_y_error * last_y_error + last_z_error * last_z_error);
           
-          double x_error = fabs(target_x - current_x);
-          double y_error = fabs(target_y - current_y);
-          double z_error = fabs(target_z - current_z);
-          double max_error = std::max({x_error, y_error, z_error});
+          ROS_INFO("All %zu waypoints reached. Last waypoint error: %.3f m, landing threshold: %.2f m", 
+                   N, last_max_error, landing_error_threshold_);
           
-          // Always update trajectory time to ensure progress
-          // This ensures we move through the trajectory even if there's some error
-          trajectory_loader_.updateTrajectoryTime(dt);
-          
-          // Check if trajectory is complete (reached last waypoint and error is small)
-          auto waypoints = trajectory_loader_.getWaypoints();
-          if (!waypoints.empty()) {
-            // Get current waypoint index based on trajectory time
-            double current_time = trajectory_loader_.getCurrentTime();
-            int current_wp_idx = static_cast<int>(current_time);
-            
-            // Calculate expected total trajectory time based on waypoints
-            double expected_total_time = (waypoints.size() - 1) * 1.0; // 1 second per waypoint
-            
-            // Only check for landing if we're near the end of the trajectory
-            if (current_time >= expected_total_time * 0.95) { // 95% of expected time
-              // Get last waypoint
-              Waypoint last_waypoint = waypoints.back();
-              
-              // Calculate error to last waypoint
-              double last_x_error = fabs(last_waypoint.x - current_x);
-              double last_y_error = fabs(last_waypoint.y - current_y);
-              double last_z_error = fabs(last_waypoint.z - current_z);
-              double last_max_error = std::max({last_x_error, last_y_error, last_z_error});
-              
-              // Only trigger landing if:
-              // 1. We're very close to last waypoint (error < 0.2m)
-              // 2. We've been tracking for at least 95% of expected trajectory time
-              // 3. We've been tracking for at least 5 seconds (minimum time for meaningful trajectory)
-              if (last_max_error < 0.2 && current_time > std::max(expected_total_time * 0.95, 5.0)) {
-                ROS_INFO("Trajectory completed successfully! Starting landing sequence...");
-                ROS_INFO("Last waypoint error: %.3f m, tracking time: %.2f s, expected total time: %.2f s", 
-                         last_max_error, current_time, expected_total_time);
-                ROS_INFO("Current waypoint index: %d, total waypoints: %zu", current_wp_idx, waypoints.size());
-                control_state_ = STATE_LANDING;
-                break;
-              }
-            }
-            
-            // Log current trajectory progress
-            ROS_INFO_THROTTLE(2.0, "Trajectory progress: time = %.2f s, current waypoint = %d/%zu", 
-                              current_time, current_wp_idx + 1, waypoints.size());
-          }
-          
-          // Log tracking status
-          if (max_error < 0.2) { // 20cm threshold
-            ROS_INFO_THROTTLE(1.0, "Approaching target: position error = %.3f m, current time = %.2f s", max_error, trajectory_loader_.getCurrentTime());
+          if (last_max_error < landing_error_threshold_) {
+            ROS_INFO("Trajectory completed! Starting landing sequence...");
+            control_state_ = STATE_LANDING;
           } else {
-            ROS_INFO_THROTTLE(1.0, "Moving to target: position error = %.3f m, current time = %.2f s", max_error, trajectory_loader_.getCurrentTime());
+            // Still not close enough to last waypoint, keep moving toward it
+            target_pose_.pose.position.x = last_waypoint.x;
+            target_pose_.pose.position.y = last_waypoint.y;
+            target_pose_.pose.position.z = last_waypoint.z;
+            ROS_INFO_THROTTLE(1.0, "Moving to last waypoint: error = %.3f m", last_max_error);
           }
+          break;
+        }
+        
+        // Get current target waypoint (waypoint index starts from 0)
+        Waypoint target_wp = waypoints[current_waypoint_index_];
+        double target_x = target_wp.x;
+        double target_y = target_wp.y;
+        double target_z = target_wp.z;
+        
+        // Calculate distance to current target waypoint
+        double dx = target_x - current_x;
+        double dy = target_y - current_y;
+        double dz = target_z - current_z;
+        double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+        
+        ROS_INFO_THROTTLE(1.0, "Tracking waypoint %zu/%zu: target=(%.2f, %.2f, %.2f), current=(%.2f, %.2f, %.2f), distance=%.3f m",
+                         current_waypoint_index_ + 1, N, target_x, target_y, target_z, current_x, current_y, current_z, distance);
+        
+        // Check if current waypoint is reached
+        if (distance < waypoint_reached_threshold_) {
+          ROS_INFO("Waypoint %zu reached! Moving to next waypoint...", current_waypoint_index_ + 1);
+          current_waypoint_index_++;
           
-          // Update target pose
+          // Check if we just completed the last waypoint
+          if (current_waypoint_index_ >= N) {
+            ROS_INFO("All waypoints completed! Preparing for landing...");
+          }
+        } else {
+          // Update target pose for position controller
           target_pose_.pose.position.x = target_x;
           target_pose_.pose.position.y = target_y;
           target_pose_.pose.position.z = target_z;
         }
+        
         break;
       }
       case STATE_LANDING: {
