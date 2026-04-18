@@ -365,40 +365,49 @@ public:
           double z_error = fabs(target_z - current_z);
           double max_error = std::max({x_error, y_error, z_error});
           
+          // Always update trajectory time to ensure progress
+          // This ensures we move through the trajectory even if there's some error
+          trajectory_loader_.updateTrajectoryTime(dt);
+          
           // Check if trajectory is complete (reached last waypoint and error is small)
           auto waypoints = trajectory_loader_.getWaypoints();
           if (!waypoints.empty()) {
-            // Get last waypoint
-            Waypoint last_waypoint = waypoints.back();
-            
-            // Calculate error to last waypoint
-            double last_x_error = fabs(last_waypoint.x - current_x);
-            double last_y_error = fabs(last_waypoint.y - current_y);
-            double last_z_error = fabs(last_waypoint.z - current_z);
-            double last_max_error = std::max({last_x_error, last_y_error, last_z_error});
-            
-            // Check if we've been tracking for a while (not just starting)
+            // Get current waypoint index based on trajectory time
             double current_time = trajectory_loader_.getCurrentTime();
+            int current_wp_idx = static_cast<int>(current_time);
             
             // Calculate expected total trajectory time based on waypoints
             double expected_total_time = (waypoints.size() - 1) * 1.0; // 1 second per waypoint
             
-            // Only trigger landing if:
-            // 1. We're close to last waypoint (error < 0.3m)
-            // 2. We've been tracking for at least 80% of expected trajectory time
-            // 3. We've been tracking for at least 3 seconds (minimum time)
-            if (last_max_error < 0.3 && current_time > std::max(expected_total_time * 0.8, 3.0)) {
-              ROS_INFO("Trajectory completed successfully! Starting landing sequence...");
-              ROS_INFO("Last waypoint error: %.3f m, tracking time: %.2f s, expected total time: %.2f s", 
-                       last_max_error, current_time, expected_total_time);
-              control_state_ = STATE_LANDING;
-              break;
+            // Only check for landing if we're near the end of the trajectory
+            if (current_time >= expected_total_time * 0.95) { // 95% of expected time
+              // Get last waypoint
+              Waypoint last_waypoint = waypoints.back();
+              
+              // Calculate error to last waypoint
+              double last_x_error = fabs(last_waypoint.x - current_x);
+              double last_y_error = fabs(last_waypoint.y - current_y);
+              double last_z_error = fabs(last_waypoint.z - current_z);
+              double last_max_error = std::max({last_x_error, last_y_error, last_z_error});
+              
+              // Only trigger landing if:
+              // 1. We're very close to last waypoint (error < 0.2m)
+              // 2. We've been tracking for at least 95% of expected trajectory time
+              // 3. We've been tracking for at least 5 seconds (minimum time for meaningful trajectory)
+              if (last_max_error < 0.2 && current_time > std::max(expected_total_time * 0.95, 5.0)) {
+                ROS_INFO("Trajectory completed successfully! Starting landing sequence...");
+                ROS_INFO("Last waypoint error: %.3f m, tracking time: %.2f s, expected total time: %.2f s", 
+                         last_max_error, current_time, expected_total_time);
+                ROS_INFO("Current waypoint index: %d, total waypoints: %zu", current_wp_idx, waypoints.size());
+                control_state_ = STATE_LANDING;
+                break;
+              }
             }
+            
+            // Log current trajectory progress
+            ROS_INFO_THROTTLE(2.0, "Trajectory progress: time = %.2f s, current waypoint = %d/%zu", 
+                              current_time, current_wp_idx + 1, waypoints.size());
           }
-          
-          // Always update trajectory time to ensure progress
-          // This ensures we move through the trajectory even if there's some error
-          trajectory_loader_.updateTrajectoryTime(dt);
           
           // Log tracking status
           if (max_error < 0.2) { // 20cm threshold
