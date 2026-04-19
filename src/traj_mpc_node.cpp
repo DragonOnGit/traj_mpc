@@ -44,6 +44,16 @@ private:
   std::string odom_topic_;
   std::string trajectory_file_;
   
+  // MAVROS topic names (configurable via launch file)
+  std::string state_topic_;
+  std::string battery_topic_;
+  std::string imu_topic_;
+  std::string setpoint_pos_topic_;
+  std::string setpoint_vel_topic_;
+  std::string cmd_vel_topic_;
+  std::string set_mode_service_;
+  std::string arming_service_;
+  
   // PX4 state
   mavros_msgs::State current_state_;
   sensor_msgs::BatteryState battery_state_;
@@ -80,10 +90,46 @@ private:
   
 public:
   TrajMPCNode() : mpc_controller_(nh_) {
-    // Get parameters
+    // Get parameters from launch file
     nh_.param("odom_topic", odom_topic_, std::string("/mavros/local_position/odom"));
     nh_.param("trajectory_file", trajectory_file_, std::string("trajectories/example_trajectory.xml"));
     nh_.param("command_timeout", command_timeout_, 1.0);
+    
+    // Get configurable MAVROS topic names (with defaults)
+    nh_.param("state_topic", state_topic_, std::string("/mavros/state"));
+    nh_.param("battery_topic", battery_topic_, std::string("/mavros/battery"));
+    nh_.param("imu_topic", imu_topic_, std::string("/mavros/imu/data"));
+    nh_.param("setpoint_pos_topic", setpoint_pos_topic_, std::string("/mavros/setpoint_position/local"));
+    nh_.param("setpoint_vel_topic", setpoint_vel_topic_, std::string("/mavros/setpoint_velocity/cmd_vel"));
+    nh_.param("cmd_vel_topic", cmd_vel_topic_, std::string("/mavros/setpoint_velocity/cmd_vel_unstamped"));
+    nh_.param("set_mode_service", set_mode_service_, std::string("/mavros/set_mode"));
+    nh_.param("arming_service", arming_service_, std::string("/mavros/cmd/arming"));
+    
+    // Validate required parameters
+    if (odom_topic_.empty()) {
+      ROS_ERROR("odom_topic parameter is empty! Using default: /mavros/local_position/odom");
+      odom_topic_ = "/mavros/local_position/odom";
+    }
+    if (cmd_vel_topic_.empty()) {
+      ROS_ERROR("cmd_vel_topic parameter is empty! Using default: /mavros/setpoint_velocity/cmd_vel_unstamped");
+      cmd_vel_topic_ = "/mavros/setpoint_velocity/cmd_vel_unstamped";
+    }
+    if (setpoint_pos_topic_.empty()) {
+      ROS_ERROR("setpoint_pos_topic parameter is empty! Using default: /mavros/setpoint_position/local");
+      setpoint_pos_topic_ = "/mavros/setpoint_position/local";
+    }
+    
+    ROS_INFO("=== Topic Configuration ===");
+    ROS_INFO("odom_topic: %s", odom_topic_.c_str());
+    ROS_INFO("state_topic: %s", state_topic_.c_str());
+    ROS_INFO("battery_topic: %s", battery_topic_.c_str());
+    ROS_INFO("imu_topic: %s", imu_topic_.c_str());
+    ROS_INFO("setpoint_pos_topic: %s", setpoint_pos_topic_.c_str());
+    ROS_INFO("setpoint_vel_topic: %s", setpoint_vel_topic_.c_str());
+    ROS_INFO("cmd_vel_topic: %s", cmd_vel_topic_.c_str());
+    ROS_INFO("set_mode_service: %s", set_mode_service_.c_str());
+    ROS_INFO("arming_service: %s", arming_service_.c_str());
+    ROS_INFO("=========================");
     
     // Convert to absolute path using package path
     if (trajectory_file_.find("/") != 0) { // If not absolute path
@@ -109,18 +155,18 @@ public:
     
     // Subscribers
     odom_sub_ = nh_.subscribe(odom_topic_, 10, &TrajMPCNode::odomCallback, this);
-    state_sub_ = nh_.subscribe("/mavros/state", 10, &TrajMPCNode::stateCallback, this);
-    battery_sub_ = nh_.subscribe("/mavros/battery", 10, &TrajMPCNode::batteryCallback, this);
-    imu_sub_ = nh_.subscribe("/mavros/imu/data", 10, &TrajMPCNode::imuCallback, this);
+    state_sub_ = nh_.subscribe(state_topic_, 10, &TrajMPCNode::stateCallback, this);
+    battery_sub_ = nh_.subscribe(battery_topic_, 10, &TrajMPCNode::batteryCallback, this);
+    imu_sub_ = nh_.subscribe(imu_topic_, 10, &TrajMPCNode::imuCallback, this);
     
     // Publishers
-    setpoint_pos_pub_ = nh_.advertise<geometry_msgs::PoseStamped>("/mavros/setpoint_position/local", 10);
-    setpoint_vel_pub_ = nh_.advertise<geometry_msgs::TwistStamped>("/mavros/setpoint_velocity/cmd_vel", 10);
-    cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>("/mavros/setpoint_velocity/cmd_vel_unstamped", 10);
+    setpoint_pos_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(setpoint_pos_topic_, 10);
+    setpoint_vel_pub_ = nh_.advertise<geometry_msgs::TwistStamped>(setpoint_vel_topic_, 10);
+    cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>(cmd_vel_topic_, 10);
     
     // Service clients
-    set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>("/mavros/set_mode");
-    arming_client_ = nh_.serviceClient<mavros_msgs::CommandBool>("/mavros/cmd/arming");
+    set_mode_client_ = nh_.serviceClient<mavros_msgs::SetMode>(set_mode_service_);
+    arming_client_ = nh_.serviceClient<mavros_msgs::CommandBool>(arming_service_);
     
     // Timers
     double control_rate;

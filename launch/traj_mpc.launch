@@ -11,8 +11,21 @@
     <param name="max_acc" value="1.0" />
     <param name="control_rate" value="10.0" />
     
-    <!-- Topic Parameters -->
+    <!-- Topic Configuration Parameters -->
+    <!-- MAVROS State and Sensor Topics -->
     <param name="odom_topic" value="/mavros/local_position/odom" />
+    <param name="state_topic" value="/mavros/state" />
+    <param name="battery_topic" value="/mavros/battery" />
+    <param name="imu_topic" value="/mavros/imu/data" />
+    
+    <!-- MAVROS Control Topics -->
+    <param name="setpoint_pos_topic" value="/mavros/setpoint_position/local" />
+    <param name="setpoint_vel_topic" value="/mavros/setpoint_velocity/cmd_vel" />
+    <param name="cmd_vel_topic" value="/mavros/setpoint_velocity/cmd_vel_unstamped" />
+    
+    <!-- MAVROS Service Topics -->
+    <param name="set_mode_service" value="/mavros/set_mode" />
+    <param name="arming_service" value="/mavros/cmd/arming" />
     
     <!-- Trajectory File -->
     <param name="trajectory_file" value="$(find traj_mpc)/trajectories/example_trajectory.xml" />
