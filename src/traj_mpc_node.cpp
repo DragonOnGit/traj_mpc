@@ -52,23 +52,24 @@ private:
   
   // Trajectory tracking parameters
   size_t current_waypoint_index_ = 0;
-  double waypoint_reached_threshold_ = 0.1;
+  double waypoint_reached_threshold_ = 0.25;
   
   // Reference path message
   nav_msgs::Path reference_path_;
   
 public:
   TrajMPCNode() : mpc_controller_(nh_) {
-    // Get parameters from launch file
-    nh_.param("odom_topic", odom_topic_, std::string("/odom"));
-    nh_.param("trajectory_file", trajectory_file_, std::string("trajectories/example_trajectory.xml"));
-    nh_.param("setpoint_pos_topic", setpoint_pos_topic_, std::string("/target_position"));
-    nh_.param("cmd_vel_topic", cmd_vel_topic_, std::string("/cmd_vel"));
-    nh_.param("path_topic", path_topic_, std::string("/path_exp"));
+    // Get parameters from launch file with namespace
+    std::string ns = ros::this_node::getName();
+    nh_.param(ns + "/odom_topic", odom_topic_, std::string("/odom"));
+    nh_.param(ns + "/trajectory_file", trajectory_file_, std::string("trajectories/example_trajectory.xml"));
+    nh_.param(ns + "/setpoint_pos_topic", setpoint_pos_topic_, std::string("/target_position"));
+    nh_.param(ns + "/cmd_vel_topic", cmd_vel_topic_, std::string("/cmd_vel"));
+    nh_.param(ns + "/path_topic", path_topic_, std::string("/path_exp"));
     
     // Get velocity control parameters
-    nh_.param("max_velocity", max_velocity_, 2.0);
-    nh_.param("max_acceleration", max_acceleration_, 1.0);
+    nh_.param(ns + "/max_velocity", max_velocity_, 2.0);
+    nh_.param(ns + "/max_acceleration", max_acceleration_, 1.0);
     
     // Validate required parameters
     if (odom_topic_.empty()) {
@@ -131,7 +132,8 @@ public:
     
     // Timers
     double control_rate;
-    nh_.param("control_rate", control_rate, 10.0);
+    std::string ns = ros::this_node::getName();
+    nh_.param(ns + "/control_rate", control_rate, 10.0);
     control_timer_ = nh_.createTimer(ros::Duration(1.0 / control_rate), &TrajMPCNode::controlCallback, this);
     
     // Reference path publish timer (10Hz)
@@ -157,8 +159,9 @@ public:
       geometry_msgs::PoseStamped pose;
       pose.header.frame_id = "camera_init";
       pose.header.stamp = ros::Time::now();
-      pose.pose.position.x = waypoints[i].x;
-      pose.pose.position.y = waypoints[i].y;
+      // Fix coordinate system direction: invert x and y axes
+      pose.pose.position.x = -waypoints[i].x;
+      pose.pose.position.y = -waypoints[i].y;
       pose.pose.position.z = waypoints[i].z;
       pose.pose.orientation.x = waypoints[i].qx;
       pose.pose.orientation.y = waypoints[i].qy;
