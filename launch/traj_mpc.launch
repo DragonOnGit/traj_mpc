@@ -1,0 +1,27 @@
+<launch>
+  <!-- MPC Trajectory Tracking Node -->
+  <node name="traj_mpc_node" pkg="traj_mpc" type="traj_mpc_node" output="screen">
+    <!-- MPC Parameters -->
+    <param name="horizon" value="10" />
+    <param name="dt" value="0.1" />
+    <param name="weight_pos" value="10.0" />
+    <param name="weight_vel" value="1.0" />
+    <param name="weight_acc" value="0.1" />
+    <param name="max_vel" value="2.0" />
+    <param name="max_acc" value="1.0" />
+    <param name="control_rate" value="10.0" />
+    
+    <!-- Velocity Control Parameters -->
+    <param name="max_velocity" value="2.0" />
+    <param name="max_acceleration" value="1.0" />
+    
+    <!-- Topic Configuration Parameters -->
+    <param name="odom_topic" value="/odom" />
+    <param name="setpoint_pos_topic" value="/target_position" />
+    <param name="cmd_vel_topic" value="/cmd_vel" />
+    <param name="path_topic" value="/path_exp" />
+    
+    <!-- Trajectory File -->
+    <param name="trajectory_file" value="$(find traj_mpc)/trajectories/example_trajectory.xml" />
+  </node>
+</launch>
