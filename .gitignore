@@ -1,0 +1,20 @@
+# Build directories
+build/
+devel/
+
+# Data directory (rosbag files)
+data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ROS
+*.bag
+*.bag.lock
+
+# OS
+.DS_Store
+Thumbs.db

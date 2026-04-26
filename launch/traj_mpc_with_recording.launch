@@ -1,0 +1,42 @@
+<launch>
+  <!-- Rosbag Recording Launch File -->
+  <!-- This launch file starts the traj_mpc package and automatically begins rosbag recording -->
+
+  <!-- Arguments for dynamic topic configuration -->
+  <arg name="topics_file" default="$(find traj_mpc)/config/record_topics.txt" />
+  <arg name="bag_name" default="traj_mpc_$(env DATE)" />
+  <arg name="record_all" default="false" />
+
+  <!-- Include the main traj_mpc launch file -->
+  <include file="$(find traj_mpc)/launch/traj_mpc.launch" />
+
+  <!-- Rosbag record node -->
+  <node name="rosbag_record" pkg="rosbag" type="record"
+        args="-O $(find traj_mpc)/data/$(arg bag_name) $(arg topics_file)"
+        if="false" />
+
+  <!-- Rosbag record node with explicit topics (default) -->
+  <node name="rosbag_record_explicit" pkg="rosbag" type="record"
+        args="-O $(find traj_mpc)/data/$(arg bag_name)
+              /Laser_map
+              /Odometry
+              /cloud_effected
+              /cloud_registered
+              /cloud_registered_body
+              /path
+              /path_exp
+              /robot1/robot/cmd_vel
+              /robot1/robot/ground_truth
+              /robot1/robot/imu
+              /robot1/robot/point_cloud
+              /rosout
+              /rosout_agg
+              /tf"
+        unless="$(arg record_all)" />
+
+  <!-- Rosbag record all topics (when record_all is true) -->
+  <node name="rosbag_record_all" pkg="rosbag" type="record"
+        args="-O $(find traj_mpc)/data/$(arg bag_name) -a"
+        if="$(arg record_all)" />
+
+</launch>
