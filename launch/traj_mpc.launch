@@ -1,4 +1,18 @@
 <launch>
+  <!-- Static Transform Parameters: map to camera_init -->
+  <param name="map_to_camera_init_x" value="0.0" />
+  <param name="map_to_camera_init_y" value="0.0" />
+  <param name="map_to_camera_init_z" value="0.0" />
+  <param name="map_to_camera_init_roll" value="0.0" />
+  <param name="map_to_camera_init_pitch" value="0.0" />
+  <param name="map_to_camera_init_yaw" value="0.0" />
+
+  <!-- Static Transform Publisher: map -> camera_init -->
+  <node name="static_transform_publisher_map_to_camera" pkg="tf2_ros" type="static_transform_publisher"
+        args="$(map_to_camera_init_x) $(map_to_camera_init_y) $(map_to_camera_init_z)
+              $(map_to_camera_init_roll) $(map_to_camera_init_pitch) $(map_to_camera_init_yaw)
+              map camera_init" />
+
   <!-- MPC Trajectory Tracking Node -->
   <node name="traj_mpc_node" pkg="traj_mpc" type="traj_mpc_node" output="screen">
     <!-- MPC Parameters -->
@@ -10,17 +24,17 @@
     <param name="max_vel" value="2.0" />
     <param name="max_acc" value="1.0" />
     <param name="control_rate" value="10.0" />
-    
+
     <!-- Velocity Control Parameters -->
     <param name="max_velocity" value="2.0" />
     <param name="max_acceleration" value="1.0" />
-    
+
     <!-- Topic Configuration Parameters -->
     <param name="odom_topic" value="/odom" />
     <param name="setpoint_pos_topic" value="/target_position" />
     <param name="cmd_vel_topic" value="/cmd_vel" />
     <param name="path_topic" value="/path_exp" />
-    
+
     <!-- Trajectory File -->
     <param name="trajectory_file" value="$(find traj_mpc)/trajectories/example_trajectory.xml" />
   </node>
