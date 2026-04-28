@@ -15,17 +15,47 @@
 
   <!-- MPC Trajectory Tracking Node -->
   <node name="traj_mpc_node" pkg="traj_mpc" type="traj_mpc_node" output="screen">
-    <!-- MPC Parameters -->
+    <!-- MPC Basic Parameters -->
     <param name="horizon" value="10" />
     <param name="dt" value="0.1" />
-    <param name="weight_pos" value="10.0" />
-    <param name="weight_vel" value="1.0" />
-    <param name="weight_acc" value="0.1" />
-    <param name="max_vel" value="2.0" />
-    <param name="max_acc" value="1.0" />
     <param name="control_rate" value="10.0" />
 
-    <!-- Velocity Control Parameters -->
+    <!-- Per-axis Position Error Weights (P matrix diagonal) -->
+    <param name="weight_pos_x" value="10.0" />
+    <param name="weight_pos_y" value="10.0" />
+    <param name="weight_pos_z" value="10.0" />
+
+    <!-- Per-axis Velocity Weights (Q matrix diagonal) -->
+    <param name="weight_vel_x" value="1.0" />
+    <param name="weight_vel_y" value="1.0" />
+    <param name="weight_vel_z" value="1.0" />
+
+    <!-- Per-axis Acceleration Weights (R matrix diagonal) -->
+    <param name="weight_acc_x" value="0.1" />
+    <param name="weight_acc_y" value="0.1" />
+    <param name="weight_acc_z" value="0.1" />
+
+    <!-- Per-axis Velocity Constraints -->
+    <param name="max_vel_x" value="2.0" />
+    <param name="max_vel_y" value="2.0" />
+    <param name="max_vel_z" value="2.0" />
+
+    <!-- Per-axis Acceleration Constraints -->
+    <param name="max_acc_x" value="1.0" />
+    <param name="max_acc_y" value="1.0" />
+    <param name="max_acc_z" value="1.0" />
+
+    <!-- Second-order Model Damping Ratio per axis -->
+    <param name="damping_x" value="0.8" />
+    <param name="damping_y" value="0.8" />
+    <param name="damping_z" value="0.8" />
+
+    <!-- Second-order Model Natural Frequency per axis -->
+    <param name="omega_x" value="5.0" />
+    <param name="omega_y" value="5.0" />
+    <param name="omega_z" value="5.0" />
+
+    <!-- Velocity Control Parameters (for simple proportional control fallback) -->
     <param name="max_velocity" value="2.0" />
     <param name="max_acceleration" value="1.0" />
 
@@ -34,6 +64,7 @@
     <param name="setpoint_pos_topic" value="/target_position" />
     <param name="cmd_vel_topic" value="/cmd_vel" />
     <param name="path_topic" value="/path_exp" />
+    <param name="position_exp_topic" value="/position_exp" />
 
     <!-- Trajectory File -->
     <param name="trajectory_file" value="$(find traj_mpc)/trajectories/example_trajectory.xml" />
