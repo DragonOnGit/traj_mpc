@@ -145,7 +145,6 @@ public:
     
     // Timers
     double control_rate;
-    std::string ns = ros::this_node::getName();
     nh_.param(ns + "/control_rate", control_rate, 10.0);
     control_timer_ = nh_.createTimer(ros::Duration(1.0 / control_rate), &TrajMPCNode::controlCallback, this);
     
