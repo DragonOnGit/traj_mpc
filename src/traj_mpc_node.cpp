@@ -21,6 +21,7 @@ private:
   ros::Publisher setpoint_pos_pub_; // Position control publisher (deprecated)
   ros::Publisher cmd_vel_pub_;     // Velocity control publisher
   ros::Publisher path_pub_;         // Reference trajectory publisher
+  ros::Publisher position_exp_pub_; // Expected position publisher (nav_msgs/Odometry)
   
   // Timers
   ros::Timer control_timer_;
@@ -36,6 +37,7 @@ private:
   std::string setpoint_pos_topic_;  // Position control topic (deprecated)
   std::string cmd_vel_topic_;       // Velocity control topic
   std::string path_topic_;           // Reference trajectory topic
+  std::string position_exp_topic_;   // Expected position topic
   
   // Control parameters
   double max_velocity_;              // Maximum velocity
@@ -57,6 +59,10 @@ private:
   // Reference path message
   nav_msgs::Path reference_path_;
   
+  // Expected position message (nav_msgs/Odometry)
+  nav_msgs::Odometry expected_position_;
+  size_t last_published_waypoint_index_ = 0;
+  
 public:
   TrajMPCNode() : mpc_controller_(nh_) {
     // Get parameters from launch file with namespace
@@ -66,6 +72,7 @@ public:
     nh_.param(ns + "/setpoint_pos_topic", setpoint_pos_topic_, std::string("/target_position"));
     nh_.param(ns + "/cmd_vel_topic", cmd_vel_topic_, std::string("/cmd_vel"));
     nh_.param(ns + "/path_topic", path_topic_, std::string("/path_exp"));
+    nh_.param(ns + "/position_exp_topic", position_exp_topic_, std::string("/position_exp"));
     
     // Get velocity control parameters
     nh_.param(ns + "/max_velocity", max_velocity_, 2.0);
@@ -84,12 +91,17 @@ public:
       ROS_ERROR("path_topic parameter is empty! Using default: /path_exp");
       path_topic_ = "/path_exp";
     }
+    if (position_exp_topic_.empty()) {
+      ROS_ERROR("position_exp_topic parameter is empty! Using default: /position_exp");
+      position_exp_topic_ = "/position_exp";
+    }
     
     ROS_INFO("=== Topic Configuration ===");
     ROS_INFO("odom_topic: %s", odom_topic_.c_str());
     ROS_INFO("setpoint_pos_topic: %s (deprecated - using velocity control)", setpoint_pos_topic_.c_str());
     ROS_INFO("cmd_vel_topic: %s", cmd_vel_topic_.c_str());
     ROS_INFO("path_topic: %s", path_topic_.c_str());
+    ROS_INFO("position_exp_topic: %s", position_exp_topic_.c_str());
     ROS_INFO("=========================");
     
     ROS_INFO("=== Velocity Control Parameters ===");
@@ -129,6 +141,7 @@ public:
     setpoint_pos_pub_ = nh_.advertise<geometry_msgs::PoseStamped>(setpoint_pos_topic_, 10);
     cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>(cmd_vel_topic_, 10);
     path_pub_ = nh_.advertise<nav_msgs::Path>(path_topic_, 10);
+    position_exp_pub_ = nh_.advertise<nav_msgs::Odometry>(position_exp_topic_, 10);
     
     // Timers
     double control_rate;
@@ -146,8 +159,59 @@ public:
     target_pose_.pose.position.z = 0.0;
     target_pose_.pose.orientation.w = 1.0;
     
+    // Initialize and publish initial expected position (first waypoint)
+    initializeExpectedPosition();
+    
     ROS_INFO("Traj MPC Node initialized without MAVROS dependencies");
     ROS_INFO("Using velocity control mode with reference trajectory publishing to %s", path_topic_.c_str());
+  }
+  
+  void initializeExpectedPosition() {
+    auto waypoints = trajectory_loader_.getWaypoints();
+    if (!waypoints.empty()) {
+      Waypoint first_wp = waypoints[0];
+      expected_position_.header.frame_id = "camera_init";
+      expected_position_.header.stamp = ros::Time::now();
+      expected_position_.pose.pose.position.x = -first_wp.x;
+      expected_position_.pose.pose.position.y = -first_wp.y;
+      expected_position_.pose.pose.position.z = first_wp.z;
+      expected_position_.pose.pose.orientation.x = first_wp.qx;
+      expected_position_.pose.pose.orientation.y = first_wp.qy;
+      expected_position_.pose.pose.orientation.z = first_wp.qz;
+      expected_position_.pose.pose.orientation.w = first_wp.qw;
+      position_exp_pub_.publish(expected_position_);
+      last_published_waypoint_index_ = 0;
+      ROS_INFO("Initial expected position published: x=%.2f, y=%.2f, z=%.2f", 
+               expected_position_.pose.pose.position.x,
+               expected_position_.pose.pose.position.y,
+               expected_position_.pose.pose.position.z);
+    }
+  }
+  
+  void publishExpectedPosition(size_t waypoint_index) {
+    auto waypoints = trajectory_loader_.getWaypoints();
+    if (waypoint_index >= waypoints.size()) {
+      return;
+    }
+    
+    Waypoint wp = waypoints[waypoint_index];
+    expected_position_.header.frame_id = "camera_init";
+    expected_position_.header.stamp = ros::Time::now();
+    expected_position_.pose.pose.position.x = -wp.x;
+    expected_position_.pose.pose.position.y = -wp.y;
+    expected_position_.pose.pose.position.z = wp.z;
+    expected_position_.pose.pose.orientation.x = wp.qx;
+    expected_position_.pose.pose.orientation.y = wp.qy;
+    expected_position_.pose.pose.orientation.z = wp.qz;
+    expected_position_.pose.pose.orientation.w = wp.qw;
+    
+    position_exp_pub_.publish(expected_position_);
+    last_published_waypoint_index_ = waypoint_index;
+    ROS_INFO("Expected position updated: waypoint %zu, x=%.2f, y=%.2f, z=%.2f",
+             waypoint_index + 1,
+             expected_position_.pose.pose.position.x,
+             expected_position_.pose.pose.position.y,
+             expected_position_.pose.pose.position.z);
   }
   
   void initializeReferencePath() {
@@ -244,8 +308,19 @@ public:
           if (current_waypoint_index_ >= total_waypoints) {
             ROS_INFO("All waypoints completed! Mission finished.");
             control_state_ = STATE_COMPLETED;
+          } else {
+            // Publish new expected position immediately when waypoint updates
+            publishExpectedPosition(current_waypoint_index_);
           }
         } else {
+          // Publish current expected position (same as last published if not updated)
+          if (last_published_waypoint_index_ != current_waypoint_index_) {
+            publishExpectedPosition(current_waypoint_index_);
+          } else {
+            // Republish the same expected position
+            expected_position_.header.stamp = ros::Time::now();
+            position_exp_pub_.publish(expected_position_);
+          }
           // ---------------------------
           // VELOCITY CONTROL MODE
           // ---------------------------
