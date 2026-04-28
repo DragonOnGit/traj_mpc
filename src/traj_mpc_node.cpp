@@ -172,8 +172,9 @@ public:
       Waypoint first_wp = waypoints[0];
       expected_position_.header.frame_id = "camera_init";
       expected_position_.header.stamp = ros::Time::now();
-      expected_position_.pose.pose.position.x = -first_wp.x;
-      expected_position_.pose.pose.position.y = -first_wp.y;
+      // For camera_init frame, use original coordinates without inversion
+      expected_position_.pose.pose.position.x = first_wp.x;
+      expected_position_.pose.pose.position.y = first_wp.y;
       expected_position_.pose.pose.position.z = first_wp.z;
       expected_position_.pose.pose.orientation.x = first_wp.qx;
       expected_position_.pose.pose.orientation.y = first_wp.qy;
@@ -197,8 +198,9 @@ public:
     Waypoint wp = waypoints[waypoint_index];
     expected_position_.header.frame_id = "camera_init";
     expected_position_.header.stamp = ros::Time::now();
-    expected_position_.pose.pose.position.x = -wp.x;
-    expected_position_.pose.pose.position.y = -wp.y;
+    // For camera_init frame, use original coordinates without inversion
+    expected_position_.pose.pose.position.x = wp.x;
+    expected_position_.pose.pose.position.y = wp.y;
     expected_position_.pose.pose.position.z = wp.z;
     expected_position_.pose.pose.orientation.x = wp.qx;
     expected_position_.pose.pose.orientation.y = wp.qy;
@@ -223,9 +225,9 @@ public:
       geometry_msgs::PoseStamped pose;
       pose.header.frame_id = "camera_init";
       pose.header.stamp = ros::Time::now();
-      // Fix coordinate system direction: invert x and y axes
-      pose.pose.position.x = -waypoints[i].x;
-      pose.pose.position.y = -waypoints[i].y;
+      // For camera_init frame, use original coordinates without inversion
+      pose.pose.position.x = waypoints[i].x;
+      pose.pose.position.y = waypoints[i].y;
       pose.pose.position.z = waypoints[i].z;
       pose.pose.orientation.x = waypoints[i].qx;
       pose.pose.orientation.y = waypoints[i].qy;
