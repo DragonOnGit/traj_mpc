@@ -13,7 +13,7 @@
               $(map_to_camera_init_roll) $(map_to_camera_init_pitch) $(map_to_camera_init_yaw)
               map camera_init" />
 
-  <!-- MPC Trajectory Tracking Node -->
+  <!-- MPC Trajectory Tracking Node (First-Order Mass Point Model) -->
   <node name="traj_mpc_node" pkg="traj_mpc" type="traj_mpc_node" output="screen">
     <!-- MPC Basic Parameters -->
     <param name="horizon" value="10" />
@@ -41,27 +41,17 @@
     <param name="max_vel_z" value="2.0" />
 
     <!-- Per-axis Acceleration Constraints -->
-    <param name="max_acc_x" value="1.0" />
-    <param name="max_acc_y" value="1.0" />
-    <param name="max_acc_z" value="1.0" />
+    <param name="max_acc_x" value="3.0" />
+    <param name="max_acc_y" value="3.0" />
+    <param name="max_acc_z" value="3.0" />
 
-    <!-- Second-order Model Damping Ratio per axis -->
-    <param name="damping_x" value="0.8" />
-    <param name="damping_y" value="0.8" />
-    <param name="damping_z" value="0.8" />
-
-    <!-- Second-order Model Natural Frequency per axis -->
-    <param name="omega_x" value="5.0" />
-    <param name="omega_y" value="5.0" />
-    <param name="omega_z" value="5.0" />
-
-    <!-- Velocity Control Parameters (for simple proportional control fallback) -->
-    <param name="max_velocity" value="2.0" />
-    <param name="max_acceleration" value="1.0" />
+    <!-- Gravity Parameters -->
+    <param name="gravity" value="9.81" />
+    <!-- Set to true if the underlying velocity controller does NOT compensate for gravity -->
+    <param name="need_gravity_compensation" value="false" />
 
     <!-- Topic Configuration Parameters -->
     <param name="odom_topic" value="/odom" />
-    <param name="setpoint_pos_topic" value="/target_position" />
     <param name="cmd_vel_topic" value="/cmd_vel" />
     <param name="path_topic" value="/path_exp" />
     <param name="position_exp_topic" value="/position_exp" />
