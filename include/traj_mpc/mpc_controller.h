@@ -33,14 +33,14 @@ private:
   Eigen::Matrix3d Q_;
   Eigen::Matrix3d R_;
 
-  Eigen::Matrix2d A_axis_;
-  Eigen::Vector2d B_axis_;
-
   Eigen::MatrixXd A_full_;
   Eigen::MatrixXd B_full_;
 
+  Eigen::VectorXd d_;
+
   Eigen::MatrixXd F_;
   Eigen::MatrixXd G_;
+  Eigen::VectorXd D_vec_;
 
   bool prediction_matrices_valid_;
 

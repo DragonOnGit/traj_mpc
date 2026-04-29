@@ -52,7 +52,7 @@ MPCController::MPCController(ros::NodeHandle& nh)
            params_.max_vel_x, params_.max_vel_y, params_.max_vel_z);
   ROS_INFO("max_acc: [%.2f, %.2f, %.2f]",
            params_.max_acc_x, params_.max_acc_y, params_.max_acc_z);
-  ROS_INFO("gravity: %.2f, need_gravity_compensation: %s",
+  ROS_INFO("gravity: %.2f, gravity_in_model: %s",
            params_.gravity, params_.need_gravity_compensation ? "true" : "false");
   ROS_INFO("=====================================================");
 }
@@ -73,18 +73,33 @@ void MPCController::buildWeightMatrices() {
 void MPCController::buildStateSpaceModel() {
   double dt = params_.dt;
 
-  A_axis_ << 1.0, dt,
-             0.0, 1.0;
-
-  B_axis_ << 0.5 * dt * dt,
-             dt;
+  // State: x = [px, py, pz, vx, vy, vz] (position-first ordering)
+  // Input: u = [ax, ay, az]
+  //
+  // p(k+1) = p(k) + v(k)*dt + 0.5*a(k)*dt^2
+  // v(k+1) = v(k) + a(k)*dt
+  //
+  // A_full = [I_3   dt*I_3]     B_full = [0.5*dt^2 * I_3]
+  //          [0_3   I_3   ]              [dt * I_3       ]
 
   A_full_ = Eigen::MatrixXd::Zero(6, 6);
-  B_full_ = Eigen::MatrixXd::Zero(6, 3);
+  A_full_.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
+  A_full_.block<3, 3>(0, 3) = dt * Eigen::Matrix3d::Identity();
+  A_full_.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity();
 
-  for (int i = 0; i < 3; i++) {
-    A_full_.block(2 * i, 2 * i, 2, 2) = A_axis_;
-    B_full_.block(2 * i, i, 2, 1) = B_axis_;
+  B_full_ = Eigen::MatrixXd::Zero(6, 3);
+  B_full_.block<3, 3>(0, 0) = 0.5 * dt * dt * Eigen::Matrix3d::Identity();
+  B_full_.block<3, 3>(3, 0) = dt * Eigen::Matrix3d::Identity();
+
+  // Gravity disturbance vector (acts in -Z direction)
+  // When need_gravity_compensation=true, the velocity controller does NOT
+  // compensate for gravity, so we must include it as a known disturbance:
+  //   p_z(k+1) = p_z(k) + v_z(k)*dt + 0.5*a_z(k)*dt^2 - 0.5*g*dt^2
+  //   v_z(k+1) = v_z(k) + a_z(k)*dt - g*dt
+  d_ = Eigen::VectorXd::Zero(6);
+  if (params_.need_gravity_compensation) {
+    d_(2) = -0.5 * params_.gravity * dt * dt;
+    d_(5) = -params_.gravity * dt;
   }
 
   prediction_matrices_valid_ = false;
@@ -95,22 +110,37 @@ void MPCController::buildPredictionMatrices() {
   int n_state = 6;
   int n_input = 3;
 
+  // Precompute powers of A: A^0, A^1, ..., A^N
   std::vector<Eigen::MatrixXd> A_pows(N + 1);
   A_pows[0] = Eigen::MatrixXd::Identity(n_state, n_state);
   for (int k = 1; k <= N; k++) {
     A_pows[k] = A_pows[k - 1] * A_full_;
   }
 
+  // Build prediction matrices:
+  // X_pred = F * x0 + G * U + D_vec
+  // where X_pred = [x(1); x(2); ...; x(N)]
+  //       U = [u(0); u(1); ...; u(N-1)]
   F_ = Eigen::MatrixXd(n_state * N, n_state);
   G_ = Eigen::MatrixXd::Zero(n_state * N, n_input * N);
+  D_vec_ = Eigen::VectorXd::Zero(n_state * N);
 
   for (int k = 0; k < N; k++) {
+    // F(k) = A^{k+1}
     F_.block(n_state * k, 0, n_state, n_state) = A_pows[k + 1];
 
+    // G(k, i) = A^{k-i} * B  for i = 0, ..., k
     for (int i = 0; i <= k; i++) {
       G_.block(n_state * k, n_input * i, n_state, n_input) =
           A_pows[k - i] * B_full_;
     }
+
+    // D_vec(k) = sum_{j=0}^{k} A^j * d  (accumulated disturbance)
+    Eigen::VectorXd D_k = Eigen::VectorXd::Zero(n_state);
+    for (int j = 0; j <= k; j++) {
+      D_k += A_pows[j] * d_;
+    }
+    D_vec_.segment(n_state * k, n_state) = D_k;
   }
 
   prediction_matrices_valid_ = true;
@@ -163,6 +193,7 @@ Eigen::VectorXd MPCController::solveMPC() {
     buildPredictionMatrices();
   }
 
+  // Build block-diagonal weight matrices for the full horizon
   Eigen::MatrixXd Q_bar = Eigen::MatrixXd::Zero(n_state * N, n_state * N);
   for (int k = 0; k < N; k++) {
     Eigen::Matrix<double, 6, 6> Q_step = Eigen::Matrix<double, 6, 6>::Zero();
@@ -176,6 +207,8 @@ Eigen::VectorXd MPCController::solveMPC() {
     R_bar.block(n_input * k, n_input * k, n_input, n_input) = R_;
   }
 
+  // Build reference vector for the full horizon
+  // Reference format: [px, py, pz, vx, vy, vz] per step (matches state ordering)
   Eigen::VectorXd X_ref = Eigen::VectorXd::Zero(n_state * N);
   for (int k = 0; k < N; k++) {
     int ref_idx = std::min(k, (int)reference_trajectory_.cols() - 1);
@@ -183,10 +216,19 @@ Eigen::VectorXd MPCController::solveMPC() {
     X_ref.segment(n_state * k + 3, 3) = reference_trajectory_.block(3, ref_idx, 3, 1);
   }
 
+  // QP formulation with gravity disturbance:
+  // X_pred = F*x0 + G*U + D_vec
+  // J = (X_pred - X_ref)^T Q_bar (X_pred - X_ref) + U^T R_bar U
+  //   = U^T (G^T Q_bar G + R_bar) U + 2*(F*x0 + D_vec - X_ref)^T Q_bar G U + const
+  //
+  // min 0.5*U^T H U + f^T U
+  // H = 2*(G^T Q_bar G + R_bar)
+  // f = 2*G^T Q_bar (F*x0 + D_vec - X_ref)
   Eigen::VectorXd x0 = current_state_;
   Eigen::MatrixXd H = 2.0 * (G_.transpose() * Q_bar * G_ + R_bar);
-  Eigen::VectorXd f = 2.0 * G_.transpose() * Q_bar * (F_ * x0 - X_ref);
+  Eigen::VectorXd f = 2.0 * G_.transpose() * Q_bar * (F_ * x0 + D_vec_ - X_ref);
 
+  // Acceleration constraints (box constraints for all steps)
   Eigen::VectorXd u_lb(n_input * N);
   Eigen::VectorXd u_ub(n_input * N);
   for (int k = 0; k < N; k++) {
@@ -194,6 +236,9 @@ Eigen::VectorXd MPCController::solveMPC() {
     u_ub.segment(n_input * k, 3) << params_.max_acc_x, params_.max_acc_y, params_.max_acc_z;
   }
 
+  // Velocity constraints: tighten first-step acceleration bounds
+  // |v(k+1)| <= max_vel => |v_current + a(0)*dt| <= max_vel
+  // => (vel_lb - v_current)/dt <= a(0) <= (vel_ub - v_current)/dt
   Eigen::Vector3d vel_current = current_state_.tail(3);
   Eigen::Vector3d vel_lb, vel_ub;
   vel_lb << -params_.max_vel_x, -params_.max_vel_y, -params_.max_vel_z;

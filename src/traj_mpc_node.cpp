@@ -273,6 +273,9 @@ public:
 
           // Step 3: Convert acceleration to velocity command
           // v_cmd = v_current + a_cmd * dt
+          // Gravity is handled inside the MPC model (as a constant disturbance
+          // when need_gravity_compensation=true), so a_cmd already includes
+          // the gravity counteraction. No external compensation needed.
           double dt = mpc_controller_.getParams().dt;
           Eigen::Vector3d vel_current(
               current_odom_.twist.twist.linear.x,
@@ -280,14 +283,7 @@ public:
               current_odom_.twist.twist.linear.z);
           Eigen::Vector3d vel_cmd = vel_current + acc_cmd * dt;
 
-          // Step 4: Gravity compensation for Z-axis
-          // If the underlying velocity controller does NOT handle gravity,
-          // add gravity feedforward to prevent the device from falling
-          if (mpc_controller_.getParams().need_gravity_compensation) {
-            vel_cmd(2) += mpc_controller_.getParams().gravity * dt;
-          }
-
-          // Step 5: Clip velocity to safety limits
+          // Step 4: Clip velocity to safety limits
           double max_vel_x = mpc_controller_.getParams().max_vel_x;
           double max_vel_y = mpc_controller_.getParams().max_vel_y;
           double max_vel_z = mpc_controller_.getParams().max_vel_z;
@@ -295,7 +291,7 @@ public:
           vel_cmd(1) = std::max(-max_vel_y, std::min(vel_cmd(1), max_vel_y));
           vel_cmd(2) = std::max(-max_vel_z, std::min(vel_cmd(2), max_vel_z));
 
-          // Step 6: Publish single velocity command
+          // Step 5: Publish single velocity command
           geometry_msgs::Twist cmd_vel;
           cmd_vel.linear.x = vel_cmd(0);
           cmd_vel.linear.y = vel_cmd(1);
