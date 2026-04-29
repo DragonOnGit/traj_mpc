@@ -78,9 +78,8 @@ Eigen::MatrixXd TrajectoryLoader::generateReferenceTrajectory(int current_waypoi
     return ref;
   }
 
+  Waypoint wp = waypoints_[current_waypoint];
   for (int i = 0; i < horizon; i++) {
-    int wp_idx = std::min(current_waypoint + i, (int)waypoints_.size() - 1);
-    Waypoint wp = waypoints_[wp_idx];
     ref(0, i) = wp.x;
     ref(1, i) = wp.y;
     ref(2, i) = wp.z;

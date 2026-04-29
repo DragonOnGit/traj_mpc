@@ -107,8 +107,17 @@ public:
 
     initializeExpectedPosition();
 
-    ROS_INFO("Traj MPC Node initialized with First-Order Mass Point Model");
-    ROS_INFO("Using MPC-only velocity control mode (no duplicate commands)");
+    const MPCParams& p = mpc_controller_.getParams();
+    ROS_INFO("=== MPC Weight Parameters ===");
+    ROS_INFO("P(pos): [%.2f, %.2f, %.2f]", p.weight_pos_x, p.weight_pos_y, p.weight_pos_z);
+    ROS_INFO("Q(vel): [%.2f, %.2f, %.2f]", p.weight_vel_x, p.weight_vel_y, p.weight_vel_z);
+    ROS_INFO("R(acc): [%.2f, %.2f, %.2f]", p.weight_acc_x, p.weight_acc_y, p.weight_acc_z);
+    ROS_INFO("max_vel: [%.2f, %.2f, %.2f]", p.max_vel_x, p.max_vel_y, p.max_vel_z);
+    ROS_INFO("max_acc: [%.2f, %.2f, %.2f]", p.max_acc_x, p.max_acc_y, p.max_acc_z);
+    ROS_INFO("gravity: %.2f, in_model: %s", p.gravity, p.need_gravity_compensation ? "true" : "false");
+    ROS_INFO("============================");
+
+    ROS_INFO("Traj MPC Node initialized (First-Order Mass Point Model)");
   }
 
   void initializeExpectedPosition() {
@@ -126,7 +135,7 @@ public:
       expected_position_.pose.pose.orientation.w = first_wp.qw;
       position_exp_pub_.publish(expected_position_);
       last_published_waypoint_index_ = 0;
-      ROS_INFO("Initial expected position published: x=%.2f, y=%.2f, z=%.2f",
+      ROS_INFO("Initial expected position: x=%.2f, y=%.2f, z=%.2f",
                expected_position_.pose.pose.position.x,
                expected_position_.pose.pose.position.y,
                expected_position_.pose.pose.position.z);
@@ -152,11 +161,6 @@ public:
 
     position_exp_pub_.publish(expected_position_);
     last_published_waypoint_index_ = waypoint_index;
-    ROS_INFO("Expected position updated: waypoint %zu, x=%.2f, y=%.2f, z=%.2f",
-             waypoint_index + 1,
-             expected_position_.pose.pose.position.x,
-             expected_position_.pose.pose.position.y,
-             expected_position_.pose.pose.position.z);
   }
 
   void initializeReferencePath() {
@@ -177,8 +181,6 @@ public:
       pose.pose.orientation.w = waypoints[i].qw;
       reference_path_.poses.push_back(pose);
     }
-
-    ROS_INFO("Reference path initialized with %zu waypoints", waypoints.size());
   }
 
   void publishReferencePath(const ros::TimerEvent& event) {
@@ -211,6 +213,9 @@ public:
         double current_x = current_odom_.pose.pose.position.x;
         double current_y = current_odom_.pose.pose.position.y;
         double current_z = current_odom_.pose.pose.position.z;
+        double current_vx = current_odom_.twist.twist.linear.x;
+        double current_vy = current_odom_.twist.twist.linear.y;
+        double current_vz = current_odom_.twist.twist.linear.z;
 
         auto waypoints = trajectory_loader_.getWaypoints();
         if (waypoints.empty()) {
@@ -231,20 +236,15 @@ public:
         double target_y = target_wp.y;
         double target_z = target_wp.z;
 
-        double dx = target_x - current_x;
-        double dy = target_y - current_y;
-        double dz = target_z - current_z;
-        double distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-        ROS_INFO_THROTTLE(1.0,
-                         "Tracking waypoint %zu/%zu: target=(%.2f, %.2f, %.2f), "
-                         "current=(%.2f, %.2f, %.2f), distance=%.3f m",
-                         current_waypoint_index_ + 1, total_waypoints,
-                         target_x, target_y, target_z,
-                         current_x, current_y, current_z, distance);
+        double error_x = target_x - current_x;
+        double error_y = target_y - current_y;
+        double error_z = target_z - current_z;
+        double distance = std::sqrt(error_x * error_x + error_y * error_y + error_z * error_z);
 
         if (distance < waypoint_reached_threshold_) {
-          ROS_INFO("Waypoint %zu reached! Moving to next waypoint...", current_waypoint_index_ + 1);
+          ROS_INFO("=== Waypoint %zu/%zu REACHED ===", current_waypoint_index_ + 1, total_waypoints);
+          ROS_INFO("  target=(%.3f, %.3f, %.3f), current=(%.3f, %.3f, %.3f), dist=%.4f m",
+                   target_x, target_y, target_z, current_x, current_y, current_z, distance);
           current_waypoint_index_++;
 
           if (current_waypoint_index_ >= total_waypoints) {
@@ -261,29 +261,17 @@ public:
             position_exp_pub_.publish(expected_position_);
           }
 
-          // --- MPC-only velocity control ---
-          // Step 1: Update reference trajectory based on current waypoint
           mpc_controller_.updateReference(
               trajectory_loader_.generateReferenceTrajectory(
                   static_cast<int>(current_waypoint_index_),
                   mpc_controller_.getParams().horizon));
 
-          // Step 2: Compute optimal acceleration from MPC
           Eigen::Vector3d acc_cmd = mpc_controller_.computeAcceleration();
 
-          // Step 3: Convert acceleration to velocity command
-          // v_cmd = v_current + a_cmd * dt
-          // Gravity is handled inside the MPC model (as a constant disturbance
-          // when need_gravity_compensation=true), so a_cmd already includes
-          // the gravity counteraction. No external compensation needed.
           double dt = mpc_controller_.getParams().dt;
-          Eigen::Vector3d vel_current(
-              current_odom_.twist.twist.linear.x,
-              current_odom_.twist.twist.linear.y,
-              current_odom_.twist.twist.linear.z);
+          Eigen::Vector3d vel_current(current_vx, current_vy, current_vz);
           Eigen::Vector3d vel_cmd = vel_current + acc_cmd * dt;
 
-          // Step 4: Clip velocity to safety limits
           double max_vel_x = mpc_controller_.getParams().max_vel_x;
           double max_vel_y = mpc_controller_.getParams().max_vel_y;
           double max_vel_z = mpc_controller_.getParams().max_vel_z;
@@ -291,17 +279,32 @@ public:
           vel_cmd(1) = std::max(-max_vel_y, std::min(vel_cmd(1), max_vel_y));
           vel_cmd(2) = std::max(-max_vel_z, std::min(vel_cmd(2), max_vel_z));
 
-          // Step 5: Publish single velocity command
           geometry_msgs::Twist cmd_vel;
           cmd_vel.linear.x = vel_cmd(0);
           cmd_vel.linear.y = vel_cmd(1);
           cmd_vel.linear.z = vel_cmd(2);
           cmd_vel_pub_.publish(cmd_vel);
 
-          ROS_INFO_THROTTLE(1.0,
-                           "MPC: acc=(%.3f, %.3f, %.3f), vel_cmd=(%.3f, %.3f, %.3f)",
-                           acc_cmd(0), acc_cmd(1), acc_cmd(2),
-                           vel_cmd(0), vel_cmd(1), vel_cmd(2));
+          const MPCParams& p = mpc_controller_.getParams();
+          ROS_INFO("[WP %zu/%zu] pos_err=(%+.3f,%+.3f,%+.3f) dist=%.3f",
+                   current_waypoint_index_ + 1, total_waypoints,
+                   error_x, error_y, error_z, distance);
+          ROS_INFO("  cur_pos=(%.3f,%.3f,%.3f) tgt_pos=(%.3f,%.3f,%.3f)",
+                   current_x, current_y, current_z, target_x, target_y, target_z);
+          ROS_INFO("  cur_vel=(%+.3f,%+.3f,%+.3f)",
+                   current_vx, current_vy, current_vz);
+          ROS_INFO("  mpc_acc=(%+.3f,%+.3f,%+.3f)",
+                   acc_cmd(0), acc_cmd(1), acc_cmd(2));
+          ROS_INFO("  cmd_vel=(%+.3f,%+.3f,%+.3f)",
+                   vel_cmd(0), vel_cmd(1), vel_cmd(2));
+          ROS_INFO("  W: P=[%.1f,%.1f,%.1f] Q=[%.1f,%.1f,%.1f] R=[%.2f,%.2f,%.2f]",
+                   p.weight_pos_x, p.weight_pos_y, p.weight_pos_z,
+                   p.weight_vel_x, p.weight_vel_y, p.weight_vel_z,
+                   p.weight_acc_x, p.weight_acc_y, p.weight_acc_z);
+          ROS_INFO("  lim: v_max=[%.1f,%.1f,%.1f] a_max=[%.1f,%.1f,%.1f] g=%.2f(%s)",
+                   p.max_vel_x, p.max_vel_y, p.max_vel_z,
+                   p.max_acc_x, p.max_acc_y, p.max_acc_z,
+                   p.gravity, p.need_gravity_compensation ? "in_model" : "off");
         }
 
         break;
