@@ -20,6 +20,10 @@ struct MPCParams {
 
   double gravity;
   bool need_gravity_compensation;
+
+  bool enable_disturbance;
+  double disturbance_amplitude;
+  double disturbance_frequency;
 };
 
 class MPCController {
@@ -62,6 +66,8 @@ public:
   void updateState(const nav_msgs::Odometry::ConstPtr& odom);
   void updateReference(const Eigen::MatrixXd& ref);
   Eigen::Vector3d computeAcceleration();
+
+  Eigen::Vector3d computeDisturbance(double time) const;
 
   void setParams(const MPCParams& params) {
     params_ = params;

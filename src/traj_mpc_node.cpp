@@ -8,6 +8,7 @@
 #include <ros/package.h>
 #include <cmath>
 #include <algorithm>
+#include <random>
 
 namespace traj_mpc {
 
@@ -20,6 +21,8 @@ private:
   ros::Publisher cmd_vel_pub_;
   ros::Publisher path_pub_;
   ros::Publisher position_exp_pub_;
+  ros::Publisher tube_upperbound_pub_;
+  ros::Publisher tube_lowerbound_pub_;
 
   ros::Timer control_timer_;
   ros::Timer path_publish_timer_;
@@ -32,6 +35,8 @@ private:
   std::string cmd_vel_topic_;
   std::string path_topic_;
   std::string position_exp_topic_;
+  std::string tube_upperbound_topic_;
+  std::string tube_lowerbound_topic_;
 
   nav_msgs::Odometry current_odom_;
 
@@ -47,14 +52,23 @@ private:
 
   bool odom_received_ = false;
 
+  double tube_bound_radius_;
+  std::mt19937 rng_;
+  std::uniform_real_distribution<double> uniform_dist_;
+
+  ros::Time start_time_;
+
 public:
-  TrajMPCNode() : mpc_controller_(nh_) {
+  TrajMPCNode() : mpc_controller_(nh_), rng_(std::random_device{}()), uniform_dist_(-1.0, 1.0) {
     std::string ns = ros::this_node::getName();
     nh_.param(ns + "/odom_topic", odom_topic_, std::string("/odom"));
     nh_.param(ns + "/trajectory_file", trajectory_file_, std::string("trajectories/example_trajectory.xml"));
     nh_.param(ns + "/cmd_vel_topic", cmd_vel_topic_, std::string("/cmd_vel"));
     nh_.param(ns + "/path_topic", path_topic_, std::string("/path_exp"));
     nh_.param(ns + "/position_exp_topic", position_exp_topic_, std::string("/position_exp"));
+    nh_.param(ns + "/tube_upperbound_topic", tube_upperbound_topic_, std::string("/tube_upperbound"));
+    nh_.param(ns + "/tube_lowerbound_topic", tube_lowerbound_topic_, std::string("/tube_lowerbound"));
+    nh_.param(ns + "/tube_bound_radius", tube_bound_radius_, 0.3);
 
     if (odom_topic_.empty()) {
       ROS_ERROR("odom_topic parameter is empty! Using default: /odom");
@@ -70,6 +84,8 @@ public:
     ROS_INFO("cmd_vel_topic: %s", cmd_vel_topic_.c_str());
     ROS_INFO("path_topic: %s", path_topic_.c_str());
     ROS_INFO("position_exp_topic: %s", position_exp_topic_.c_str());
+    ROS_INFO("tube_upperbound_topic: %s", tube_upperbound_topic_.c_str());
+    ROS_INFO("tube_lowerbound_topic: %s", tube_lowerbound_topic_.c_str());
     ROS_INFO("=========================");
 
     if (trajectory_file_.find("/") != 0) {
@@ -98,6 +114,8 @@ public:
     cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>(cmd_vel_topic_, 10);
     path_pub_ = nh_.advertise<nav_msgs::Path>(path_topic_, 10);
     position_exp_pub_ = nh_.advertise<nav_msgs::Odometry>(position_exp_topic_, 10);
+    tube_upperbound_pub_ = nh_.advertise<nav_msgs::Odometry>(tube_upperbound_topic_, 10);
+    tube_lowerbound_pub_ = nh_.advertise<nav_msgs::Odometry>(tube_lowerbound_topic_, 10);
 
     double control_rate;
     nh_.param(ns + "/control_rate", control_rate, 10.0);
@@ -107,6 +125,8 @@ public:
 
     initializeExpectedPosition();
 
+    start_time_ = ros::Time::now();
+
     const MPCParams& p = mpc_controller_.getParams();
     ROS_INFO("=== MPC Weight Parameters ===");
     ROS_INFO("P(pos): [%.2f, %.2f, %.2f]", p.weight_pos_x, p.weight_pos_y, p.weight_pos_z);
@@ -115,6 +135,10 @@ public:
     ROS_INFO("max_vel: [%.2f, %.2f, %.2f]", p.max_vel_x, p.max_vel_y, p.max_vel_z);
     ROS_INFO("max_acc: [%.2f, %.2f, %.2f]", p.max_acc_x, p.max_acc_y, p.max_acc_z);
     ROS_INFO("gravity: %.2f, in_model: %s", p.gravity, p.need_gravity_compensation ? "true" : "false");
+    ROS_INFO("disturbance: enable=%s, amp=%.3f, freq=%.3f",
+             p.enable_disturbance ? "true" : "false",
+             p.disturbance_amplitude, p.disturbance_frequency);
+    ROS_INFO("tube_bound_radius: %.3f", tube_bound_radius_);
     ROS_INFO("============================");
 
     ROS_INFO("Traj MPC Node initialized (First-Order Mass Point Model)");
@@ -163,6 +187,33 @@ public:
     last_published_waypoint_index_ = waypoint_index;
   }
 
+  void publishTubeBounds(const Waypoint& target_wp) {
+    double r = tube_bound_radius_;
+
+    double rand_x = uniform_dist_(rng_);
+    double rand_y = uniform_dist_(rng_);
+    double rand_z = uniform_dist_(rng_);
+
+    nav_msgs::Odometry upper_msg;
+    upper_msg.header.frame_id = "camera_init";
+    upper_msg.header.stamp = ros::Time::now();
+    upper_msg.pose.pose.position.x = target_wp.x + r * (1.0 + 0.1 * rand_x);
+    upper_msg.pose.pose.position.y = target_wp.y + r * (1.0 + 0.1 * rand_y);
+    upper_msg.pose.pose.position.z = target_wp.z + r * (1.0 + 0.1 * rand_z);
+    upper_msg.pose.pose.orientation.w = 1.0;
+
+    nav_msgs::Odometry lower_msg;
+    lower_msg.header.frame_id = "camera_init";
+    lower_msg.header.stamp = ros::Time::now();
+    lower_msg.pose.pose.position.x = target_wp.x - r * (1.0 + 0.1 * rand_x);
+    lower_msg.pose.pose.position.y = target_wp.y - r * (1.0 + 0.1 * rand_y);
+    lower_msg.pose.pose.position.z = target_wp.z - r * (1.0 + 0.1 * rand_z);
+    lower_msg.pose.pose.orientation.w = 1.0;
+
+    tube_upperbound_pub_.publish(upper_msg);
+    tube_lowerbound_pub_.publish(lower_msg);
+  }
+
   void initializeReferencePath() {
     auto waypoints = trajectory_loader_.getWaypoints();
     reference_path_.header.frame_id = "camera_init";
@@ -195,6 +246,7 @@ public:
 
     if (control_state_ == STATE_IDLE) {
       ROS_INFO("First odometry received, starting trajectory tracking...");
+      start_time_ = ros::Time::now();
       control_state_ = STATE_TRAJECTORY_TRACKING;
     }
   }
@@ -241,6 +293,8 @@ public:
         double error_z = target_z - current_z;
         double distance = std::sqrt(error_x * error_x + error_y * error_y + error_z * error_z);
 
+        publishTubeBounds(target_wp);
+
         if (distance < waypoint_reached_threshold_) {
           ROS_INFO("=== Waypoint %zu/%zu REACHED ===", current_waypoint_index_ + 1, total_waypoints);
           ROS_INFO("  target=(%.3f, %.3f, %.3f), current=(%.3f, %.3f, %.3f), dist=%.4f m",
@@ -271,6 +325,14 @@ public:
           double dt = mpc_controller_.getParams().dt;
           Eigen::Vector3d vel_current(current_vx, current_vy, current_vz);
           Eigen::Vector3d vel_cmd = vel_current + acc_cmd * dt;
+
+          if (mpc_controller_.getParams().enable_disturbance) {
+            double elapsed = (ros::Time::now() - start_time_).toSec();
+            Eigen::Vector3d disturbance = mpc_controller_.computeDisturbance(elapsed);
+            vel_cmd += disturbance * dt;
+            ROS_INFO("  disturbance=(%+.4f,%+.4f,%+.4f)",
+                     disturbance(0), disturbance(1), disturbance(2));
+          }
 
           double max_vel_x = mpc_controller_.getParams().max_vel_x;
           double max_vel_y = mpc_controller_.getParams().max_vel_y;
