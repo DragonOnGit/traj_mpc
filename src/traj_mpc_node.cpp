@@ -17,6 +17,7 @@ private:
   ros::NodeHandle nh_;
 
   ros::Subscriber odom_sub_;
+  ros::Subscriber cmd_vel_echo_sub_;
 
   ros::Publisher cmd_vel_pub_;
   ros::Publisher path_pub_;
@@ -57,6 +58,11 @@ private:
   std::uniform_real_distribution<double> uniform_dist_;
 
   ros::Time start_time_;
+
+  geometry_msgs::Twist last_published_cmd_vel_;
+  geometry_msgs::Twist echo_cmd_vel_;
+  bool echo_received_ = false;
+  int publish_count_ = 0;
 
 public:
   TrajMPCNode() : mpc_controller_(nh_), rng_(std::random_device{}()), uniform_dist_(-1.0, 1.0) {
@@ -110,6 +116,8 @@ public:
     initializeReferencePath();
 
     odom_sub_ = nh_.subscribe(odom_topic_, 10, &TrajMPCNode::odomCallback, this);
+
+    cmd_vel_echo_sub_ = nh_.subscribe(cmd_vel_topic_, 10, &TrajMPCNode::cmdVelEchoCallback, this);
 
     cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>(cmd_vel_topic_, 10);
     path_pub_ = nh_.advertise<nav_msgs::Path>(path_topic_, 10);
@@ -251,6 +259,11 @@ public:
     }
   }
 
+  void cmdVelEchoCallback(const geometry_msgs::Twist::ConstPtr& msg) {
+    echo_cmd_vel_ = *msg;
+    echo_received_ = true;
+  }
+
   void controlCallback(const ros::TimerEvent& event) {
     switch (control_state_) {
       case STATE_IDLE: {
@@ -345,7 +358,13 @@ public:
           cmd_vel.linear.x = vel_cmd(0);
           cmd_vel.linear.y = vel_cmd(1);
           cmd_vel.linear.z = vel_cmd(2);
+          cmd_vel.angular.x = 0.0;
+          cmd_vel.angular.y = 0.0;
+          cmd_vel.angular.z = 0.0;
+
           cmd_vel_pub_.publish(cmd_vel);
+          last_published_cmd_vel_ = cmd_vel;
+          publish_count_++;
 
           const MPCParams& p = mpc_controller_.getParams();
           ROS_INFO("[WP %zu/%zu] pos_err=(%+.3f,%+.3f,%+.3f) dist=%.3f",
@@ -359,6 +378,25 @@ public:
                    acc_cmd(0), acc_cmd(1), acc_cmd(2));
           ROS_INFO("  cmd_vel=(%+.3f,%+.3f,%+.3f)",
                    vel_cmd(0), vel_cmd(1), vel_cmd(2));
+
+          if (echo_received_) {
+            double echo_diff_x = std::abs(echo_cmd_vel_.linear.x - last_published_cmd_vel_.linear.x);
+            double echo_diff_y = std::abs(echo_cmd_vel_.linear.y - last_published_cmd_vel_.linear.y);
+            double echo_diff_z = std::abs(echo_cmd_vel_.linear.z - last_published_cmd_vel_.linear.z);
+            double max_diff = std::max({echo_diff_x, echo_diff_y, echo_diff_z});
+
+            if (max_diff > 0.01) {
+              ROS_WARN("  [DATA MISMATCH] published=(%+.3f,%+.3f,%+.3f) echo=(%+.3f,%+.3f,%+.3f) diff=(%.4f,%.4f,%.4f)",
+                       last_published_cmd_vel_.linear.x, last_published_cmd_vel_.linear.y, last_published_cmd_vel_.linear.z,
+                       echo_cmd_vel_.linear.x, echo_cmd_vel_.linear.y, echo_cmd_vel_.linear.z,
+                       echo_diff_x, echo_diff_y, echo_diff_z);
+              ROS_WARN("  [DATA MISMATCH] Another node may be publishing to %s!", cmd_vel_topic_.c_str());
+            } else {
+              ROS_INFO("  echo_ok: echo=(%+.3f,%+.3f,%+.3f) max_diff=%.4f",
+                       echo_cmd_vel_.linear.x, echo_cmd_vel_.linear.y, echo_cmd_vel_.linear.z, max_diff);
+            }
+          }
+
           ROS_INFO("  W: P=[%.1f,%.1f,%.1f] Q=[%.1f,%.1f,%.1f] R=[%.2f,%.2f,%.2f]",
                    p.weight_pos_x, p.weight_pos_y, p.weight_pos_z,
                    p.weight_vel_x, p.weight_vel_y, p.weight_vel_z,
@@ -378,6 +416,9 @@ public:
         stop_cmd.linear.x = 0.0;
         stop_cmd.linear.y = 0.0;
         stop_cmd.linear.z = 0.0;
+        stop_cmd.angular.x = 0.0;
+        stop_cmd.angular.y = 0.0;
+        stop_cmd.angular.z = 0.0;
         cmd_vel_pub_.publish(stop_cmd);
         break;
       }
