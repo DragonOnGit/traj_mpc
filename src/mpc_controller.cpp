@@ -33,10 +33,6 @@ MPCController::MPCController(ros::NodeHandle& nh)
   nh.param(ns + "/gravity", params_.gravity, 9.81);
   nh.param(ns + "/need_gravity_compensation", params_.need_gravity_compensation, false);
 
-  nh.param(ns + "/enable_disturbance", params_.enable_disturbance, false);
-  nh.param(ns + "/disturbance_amplitude", params_.disturbance_amplitude, 0.5);
-  nh.param(ns + "/disturbance_frequency", params_.disturbance_frequency, 0.5);
-
   current_state_ = Eigen::VectorXd::Zero(6);
   reference_trajectory_ = Eigen::MatrixXd::Zero(6, params_.horizon);
 
@@ -58,9 +54,6 @@ MPCController::MPCController(ros::NodeHandle& nh)
            params_.max_acc_x, params_.max_acc_y, params_.max_acc_z);
   ROS_INFO("gravity: %.2f, gravity_in_model: %s",
            params_.gravity, params_.need_gravity_compensation ? "true" : "false");
-  ROS_INFO("disturbance: enable=%s, amplitude=%.3f, frequency=%.3f",
-           params_.enable_disturbance ? "true" : "false",
-           params_.disturbance_amplitude, params_.disturbance_frequency);
   ROS_INFO("=====================================================");
 }
 
@@ -129,22 +122,6 @@ void MPCController::buildPredictionMatrices() {
   }
 
   prediction_matrices_valid_ = true;
-}
-
-Eigen::Vector3d MPCController::computeDisturbance(double time) const {
-  if (!params_.enable_disturbance) {
-    return Eigen::Vector3d::Zero();
-  }
-
-  double A = params_.disturbance_amplitude;
-  double f = params_.disturbance_frequency;
-
-  Eigen::Vector3d dist;
-  dist(0) = A * std::sin(2.0 * M_PI * f * time);
-  dist(1) = A * std::sin(2.0 * M_PI * f * time + 2.0 * M_PI / 3.0);
-  dist(2) = A * std::sin(2.0 * M_PI * f * time + 4.0 * M_PI / 3.0);
-
-  return dist;
 }
 
 Eigen::VectorXd MPCController::solveQP(const Eigen::MatrixXd& H,

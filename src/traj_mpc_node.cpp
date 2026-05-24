@@ -57,8 +57,6 @@ private:
   std::mt19937 rng_;
   std::uniform_real_distribution<double> uniform_dist_;
 
-  ros::Time start_time_;
-
   geometry_msgs::Twist last_published_cmd_vel_;
   geometry_msgs::Twist echo_cmd_vel_;
   bool echo_received_ = false;
@@ -133,8 +131,6 @@ public:
 
     initializeExpectedPosition();
 
-    start_time_ = ros::Time::now();
-
     const MPCParams& p = mpc_controller_.getParams();
     ROS_INFO("=== MPC Weight Parameters ===");
     ROS_INFO("P(pos): [%.2f, %.2f, %.2f]", p.weight_pos_x, p.weight_pos_y, p.weight_pos_z);
@@ -143,9 +139,6 @@ public:
     ROS_INFO("max_vel: [%.2f, %.2f, %.2f]", p.max_vel_x, p.max_vel_y, p.max_vel_z);
     ROS_INFO("max_acc: [%.2f, %.2f, %.2f]", p.max_acc_x, p.max_acc_y, p.max_acc_z);
     ROS_INFO("gravity: %.2f, in_model: %s", p.gravity, p.need_gravity_compensation ? "true" : "false");
-    ROS_INFO("disturbance: enable=%s, amp=%.3f, freq=%.3f",
-             p.enable_disturbance ? "true" : "false",
-             p.disturbance_amplitude, p.disturbance_frequency);
     ROS_INFO("tube_bound_radius: %.3f", tube_bound_radius_);
     ROS_INFO("============================");
 
@@ -254,7 +247,6 @@ public:
 
     if (control_state_ == STATE_IDLE) {
       ROS_INFO("First odometry received, starting trajectory tracking...");
-      start_time_ = ros::Time::now();
       control_state_ = STATE_TRAJECTORY_TRACKING;
     }
   }
@@ -338,14 +330,6 @@ public:
           double dt = mpc_controller_.getParams().dt;
           Eigen::Vector3d vel_current(current_vx, current_vy, current_vz);
           Eigen::Vector3d vel_cmd = vel_current + acc_cmd * dt;
-
-          if (mpc_controller_.getParams().enable_disturbance) {
-            double elapsed = (ros::Time::now() - start_time_).toSec();
-            Eigen::Vector3d disturbance = mpc_controller_.computeDisturbance(elapsed);
-            vel_cmd += disturbance * dt;
-            ROS_INFO("  disturbance=(%+.4f,%+.4f,%+.4f)",
-                     disturbance(0), disturbance(1), disturbance(2));
-          }
 
           double max_vel_x = mpc_controller_.getParams().max_vel_x;
           double max_vel_y = mpc_controller_.getParams().max_vel_y;

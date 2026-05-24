@@ -49,11 +49,6 @@
     <param name="gravity" value="9.81" />
     <param name="need_gravity_compensation" value="false" />
 
-    <!-- Disturbance Signal Parameters -->
-    <param name="enable_disturbance" value="false" />
-    <param name="disturbance_amplitude" value="0.5" />
-    <param name="disturbance_frequency" value="0.5" />
-
     <!-- Tube Bound Parameters -->
     <param name="tube_bound_radius" value="0.3" />
 
