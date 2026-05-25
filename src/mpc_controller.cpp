@@ -83,10 +83,9 @@ void MPCController::buildStateSpaceModel() {
   B_full_.block<3, 3>(3, 0) = dt * Eigen::Matrix3d::Identity();
 
   d_ = Eigen::VectorXd::Zero(6);
-  if (params_.need_gravity_compensation) {
-    d_(2) = -0.5 * params_.gravity * dt * dt;
-    d_(5) = -params_.gravity * dt;
-  }
+  // Gravity is handled directly in buildPredictionMatrices() using
+  // the exact continuous-time solution, not through the discrete d_ vector.
+  // The d_ vector is kept for potential future constant disturbances.
 
   prediction_matrices_valid_ = false;
 }
@@ -106,6 +105,9 @@ void MPCController::buildPredictionMatrices() {
   G_ = Eigen::MatrixXd::Zero(n_state * N, n_input * N);
   D_vec_ = Eigen::VectorXd::Zero(n_state * N);
 
+  double dt = params_.dt;
+  double g = params_.gravity;
+
   for (int k = 0; k < N; k++) {
     F_.block(n_state * k, 0, n_state, n_state) = A_pows[k + 1];
 
@@ -114,11 +116,21 @@ void MPCController::buildPredictionMatrices() {
           A_pows[k - i] * B_full_;
     }
 
-    Eigen::VectorXd D_k = Eigen::VectorXd::Zero(n_state);
-    for (int j = 0; j <= k; j++) {
-      D_k += A_pows[j] * d_;
+    // Compute gravity disturbance for each prediction step using
+    // the exact continuous-time solution for constant acceleration:
+    //   p_z(k+1) = p_z(k) + v_z(k)*dt - 0.5*g*dt^2
+    //   v_z(k+1) = v_z(k) - g*dt
+    //
+    // After (k+1) steps from x0:
+    //   delta_p_z = -0.5*g*(k+1)^2*dt^2  (position offset from gravity)
+    //   delta_v_z = -g*(k+1)*dt           (velocity offset from gravity)
+    if (params_.need_gravity_compensation) {
+      int steps = k + 1;
+      Eigen::VectorXd D_k = Eigen::VectorXd::Zero(n_state);
+      D_k(2) = -0.5 * g * steps * steps * dt * dt;
+      D_k(5) = -g * steps * dt;
+      D_vec_.segment(n_state * k, n_state) = D_k;
     }
-    D_vec_.segment(n_state * k, n_state) = D_k;
   }
 
   prediction_matrices_valid_ = true;

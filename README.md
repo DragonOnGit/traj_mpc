@@ -66,10 +66,13 @@ v' = a
 状态向量：`x = [px, py, pz, vx, vy, vz]`（6维，位置优先排列）
 控制输入：`u = [ax, ay, az]`（3维）
 
-当 `need_gravity_compensation=true` 时，扰动向量 `d` 包含重力项：
+当 `need_gravity_compensation=true` 时，重力扰动通过精确连续时间解直接嵌入预测矩阵：
 ```
-d = [0, 0, -0.5*g*dt^2, 0, 0, -g*dt]^T
+D_vec[k] 中:
+  delta_p_z(k) = -0.5 * g * (k+1)^2 * dt^2
+  delta_v_z(k) = -g * (k+1) * dt
 ```
+其中 `k` 为预测步索引（0到N-1），`(k+1)` 为从当前状态到该预测步的步数。
 
 ## MPC控制算法
 
