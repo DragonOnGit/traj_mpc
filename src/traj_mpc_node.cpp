@@ -26,6 +26,7 @@ private:
   ros::Publisher tube_lowerbound_pub_;
 
   ros::Timer control_timer_;
+  ros::Timer cmd_vel_hold_timer_;
   ros::Timer path_publish_timer_;
 
   MPCController mpc_controller_;
@@ -61,6 +62,8 @@ private:
   geometry_msgs::Twist echo_cmd_vel_;
   bool echo_received_ = false;
   int publish_count_ = 0;
+  int mismatch_count_ = 0;
+  int total_echo_checks_ = 0;
 
 public:
   TrajMPCNode() : mpc_controller_(nh_), rng_(std::random_device{}()), uniform_dist_(-1.0, 1.0) {
@@ -117,15 +120,22 @@ public:
 
     cmd_vel_echo_sub_ = nh_.subscribe(cmd_vel_topic_, 10, &TrajMPCNode::cmdVelEchoCallback, this);
 
-    cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>(cmd_vel_topic_, 10);
+    // Use queue_size=1 and latch=false for cmd_vel to ensure latest command is used
+    cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>(cmd_vel_topic_, 1);
     path_pub_ = nh_.advertise<nav_msgs::Path>(path_topic_, 10);
     position_exp_pub_ = nh_.advertise<nav_msgs::Odometry>(position_exp_topic_, 10);
     tube_upperbound_pub_ = nh_.advertise<nav_msgs::Odometry>(tube_upperbound_topic_, 10);
     tube_lowerbound_pub_ = nh_.advertise<nav_msgs::Odometry>(tube_lowerbound_topic_, 10);
 
     double control_rate;
-    nh_.param(ns + "/control_rate", control_rate, 10.0);
+    nh_.param(ns + "/control_rate", control_rate, 20.0);
     control_timer_ = nh_.createTimer(ros::Duration(1.0 / control_rate), &TrajMPCNode::controlCallback, this);
+
+    // Hold timer: re-publish last command at high frequency to override
+    // any conflicting publisher on the same cmd_vel topic
+    double cmd_vel_hold_rate;
+    nh_.param(ns + "/cmd_vel_hold_rate", cmd_vel_hold_rate, 50.0);
+    cmd_vel_hold_timer_ = nh_.createTimer(ros::Duration(1.0 / cmd_vel_hold_rate), &TrajMPCNode::cmdVelHoldCallback, this);
 
     path_publish_timer_ = nh_.createTimer(ros::Duration(0.1), &TrajMPCNode::publishReferencePath, this);
 
@@ -140,6 +150,7 @@ public:
     ROS_INFO("max_acc: [%.2f, %.2f, %.2f]", p.max_acc_x, p.max_acc_y, p.max_acc_z);
     ROS_INFO("gravity: %.2f, in_model: %s", p.gravity, p.need_gravity_compensation ? "true" : "false");
     ROS_INFO("tube_bound_radius: %.3f", tube_bound_radius_);
+    ROS_INFO("control_rate: %.1f Hz, cmd_vel_hold_rate: %.1f Hz", control_rate, cmd_vel_hold_rate);
     ROS_INFO("============================");
 
     ROS_INFO("Traj MPC Node initialized (First-Order Mass Point Model)");
@@ -256,6 +267,14 @@ public:
     echo_received_ = true;
   }
 
+  // Hold callback: re-publish last command at high frequency (50Hz)
+  // to override any conflicting publisher on the cmd_vel topic
+  void cmdVelHoldCallback(const ros::TimerEvent& event) {
+    if (control_state_ == STATE_TRAJECTORY_TRACKING && odom_received_) {
+      cmd_vel_pub_.publish(last_published_cmd_vel_);
+    }
+  }
+
   void controlCallback(const ros::TimerEvent& event) {
     switch (control_state_) {
       case STATE_IDLE: {
@@ -363,6 +382,7 @@ public:
           ROS_INFO("  cmd_vel=(%+.3f,%+.3f,%+.3f)",
                    vel_cmd(0), vel_cmd(1), vel_cmd(2));
 
+          total_echo_checks_++;
           if (echo_received_) {
             double echo_diff_x = std::abs(echo_cmd_vel_.linear.x - last_published_cmd_vel_.linear.x);
             double echo_diff_y = std::abs(echo_cmd_vel_.linear.y - last_published_cmd_vel_.linear.y);
@@ -370,14 +390,16 @@ public:
             double max_diff = std::max({echo_diff_x, echo_diff_y, echo_diff_z});
 
             if (max_diff > 0.01) {
-              ROS_WARN("  [DATA MISMATCH] published=(%+.3f,%+.3f,%+.3f) echo=(%+.3f,%+.3f,%+.3f) diff=(%.4f,%.4f,%.4f)",
+              mismatch_count_++;
+              ROS_WARN("  [MISMATCH %d/%d] pub=(%+.3f,%+.3f,%+.3f) echo=(%+.3f,%+.3f,%+.3f) diff=(%.4f,%.4f,%.4f)",
+                       mismatch_count_, total_echo_checks_,
                        last_published_cmd_vel_.linear.x, last_published_cmd_vel_.linear.y, last_published_cmd_vel_.linear.z,
                        echo_cmd_vel_.linear.x, echo_cmd_vel_.linear.y, echo_cmd_vel_.linear.z,
                        echo_diff_x, echo_diff_y, echo_diff_z);
-              ROS_WARN("  [DATA MISMATCH] Another node may be publishing to %s!", cmd_vel_topic_.c_str());
             } else {
-              ROS_INFO("  echo_ok: echo=(%+.3f,%+.3f,%+.3f) max_diff=%.4f",
-                       echo_cmd_vel_.linear.x, echo_cmd_vel_.linear.y, echo_cmd_vel_.linear.z, max_diff);
+              ROS_INFO("  echo_ok: echo=(%+.3f,%+.3f,%+.3f) max_diff=%.4f mismatch_rate=%.1f%%",
+                       echo_cmd_vel_.linear.x, echo_cmd_vel_.linear.y, echo_cmd_vel_.linear.z, max_diff,
+                       total_echo_checks_ > 0 ? 100.0 * mismatch_count_ / total_echo_checks_ : 0.0);
             }
           }
 
@@ -404,6 +426,7 @@ public:
         stop_cmd.angular.y = 0.0;
         stop_cmd.angular.z = 0.0;
         cmd_vel_pub_.publish(stop_cmd);
+        last_published_cmd_vel_ = stop_cmd;
         break;
       }
     }
