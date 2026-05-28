@@ -8,23 +8,25 @@
     <!-- MPC Basic Parameters -->
     <param name="horizon" value="10" />
     <param name="dt" value="0.1" />
-    <param name="control_rate" value="20.0" />
-    <param name="cmd_vel_hold_rate" value="50.0" />
+    <param name="control_rate" value="10.0" />
 
     <!-- Per-axis Position Error Weights (P matrix diagonal) -->
-    <param name="weight_pos_x" value="50.0" />
-    <param name="weight_pos_y" value="50.0" />
-    <param name="weight_pos_z" value="25.0" />
+    <!-- Higher values = more aggressive position tracking -->
+    <param name="weight_pos_x" value="10.0" />
+    <param name="weight_pos_y" value="10.0" />
+    <param name="weight_pos_z" value="20.0" />
 
     <!-- Per-axis Velocity Weights (Q matrix diagonal) -->
+    <!-- Lower values = allows faster movement; acts as damping -->
     <param name="weight_vel_x" value="1.0" />
     <param name="weight_vel_y" value="1.0" />
     <param name="weight_vel_z" value="0.5" />
 
     <!-- Per-axis Acceleration Weights (R matrix diagonal) -->
-    <param name="weight_acc_x" value="0.05" />
-    <param name="weight_acc_y" value="0.05" />
-    <param name="weight_acc_z" value="0.01" />
+    <!-- Lower values = more aggressive acceleration allowed -->
+    <param name="weight_acc_x" value="0.1" />
+    <param name="weight_acc_y" value="0.1" />
+    <param name="weight_acc_z" value="0.05" />
 
     <!-- Per-axis Velocity Constraints -->
     <param name="max_vel_x" value="2.0" />
@@ -32,25 +34,35 @@
     <param name="max_vel_z" value="2.0" />
 
     <!-- Per-axis Acceleration Constraints -->
+    <!-- max_acc_z must be > gravity (9.81) for effective takeoff and altitude control -->
     <param name="max_acc_x" value="5.0" />
     <param name="max_acc_y" value="5.0" />
     <param name="max_acc_z" value="10.0" />
 
     <!-- Gravity Parameters -->
-    <param name="gravity" value="8.2" />
+    <param name="gravity" value="9.81" />
+    <!-- Set to true if the underlying velocity controller does NOT compensate for gravity -->
     <param name="need_gravity_compensation" value="true" />
 
-    <!-- Tube Bound Parameters -->
-    <param name="tube_bound_radius" value="0.3" />
-
     <!-- Topic Configuration Parameters -->
-    <param name="odom_topic" value="/robot1/robot/ground_truth" />
-    <param name="cmd_vel_topic" value="/robot1/robot/cmd_vel" />
+    <param name="odom_topic" value="/odom" />
+    <param name="cmd_vel_topic" value="/cmd_vel" />
     <param name="path_topic" value="/path_exp" />
-    <param name="tube_upperbound_topic" value="/tube_upperbound" />
-    <param name="tube_lowerbound_topic" value="/tube_lowerbound" />
+    <param name="position_exp_topic" value="/position_exp" />
 
     <!-- Trajectory File -->
     <param name="trajectory_file" value="$(find traj_mpc)/trajectories/example_trajectory.xml" />
+
+    <!-- Tube Bound Parameters -->
+    <!-- Base offset from reference signal for upper/lower bounds -->
+    <param name="tube_bound_x" value="0.5" />
+    <param name="tube_bound_y" value="0.5" />
+    <param name="tube_bound_z" value="0.5" />
+    <!-- Random noise range added to bounds (uniform distribution) -->
+    <param name="tube_noise_range_x" value="0.05" />
+    <param name="tube_noise_range_y" value="0.05" />
+    <param name="tube_noise_range_z" value="0.05" />
+    <!-- Tube bound topic publish rate (Hz) -->
+    <param name="tube_publish_rate" value="10.0" />
   </node>
 </launch>

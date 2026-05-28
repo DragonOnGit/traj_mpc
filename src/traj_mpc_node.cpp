@@ -17,7 +17,6 @@ private:
   ros::NodeHandle nh_;
 
   ros::Subscriber odom_sub_;
-  ros::Subscriber cmd_vel_echo_sub_;
 
   ros::Publisher cmd_vel_pub_;
   ros::Publisher path_pub_;
@@ -26,8 +25,8 @@ private:
   ros::Publisher tube_lowerbound_pub_;
 
   ros::Timer control_timer_;
-  ros::Timer cmd_vel_hold_timer_;
   ros::Timer path_publish_timer_;
+  ros::Timer tube_publish_timer_;
 
   MPCController mpc_controller_;
   TrajectoryLoader trajectory_loader_;
@@ -37,8 +36,6 @@ private:
   std::string cmd_vel_topic_;
   std::string path_topic_;
   std::string position_exp_topic_;
-  std::string tube_upperbound_topic_;
-  std::string tube_lowerbound_topic_;
 
   nav_msgs::Odometry current_odom_;
 
@@ -54,28 +51,25 @@ private:
 
   bool odom_received_ = false;
 
-  double tube_bound_radius_;
+  double tube_bound_x_, tube_bound_y_, tube_bound_z_;
+  double tube_noise_range_x_, tube_noise_range_y_, tube_noise_range_z_;
+  double tube_publish_rate_;
   std::mt19937 rng_;
-  std::uniform_real_distribution<double> uniform_dist_;
 
-  geometry_msgs::Twist last_published_cmd_vel_;
-  geometry_msgs::Twist echo_cmd_vel_;
-  bool echo_received_ = false;
-  int publish_count_ = 0;
-  int mismatch_count_ = 0;
-  int total_echo_checks_ = 0;
+  double generateNoise(double range) {
+    if (range <= 0.0) return 0.0;
+    std::uniform_real_distribution<double> dist(-range, range);
+    return dist(rng_);
+  }
 
 public:
-  TrajMPCNode() : mpc_controller_(nh_), rng_(std::random_device{}()), uniform_dist_(-1.0, 1.0) {
+  TrajMPCNode() : mpc_controller_(nh_), rng_(std::random_device{}()) {
     std::string ns = ros::this_node::getName();
     nh_.param(ns + "/odom_topic", odom_topic_, std::string("/odom"));
     nh_.param(ns + "/trajectory_file", trajectory_file_, std::string("trajectories/example_trajectory.xml"));
     nh_.param(ns + "/cmd_vel_topic", cmd_vel_topic_, std::string("/cmd_vel"));
     nh_.param(ns + "/path_topic", path_topic_, std::string("/path_exp"));
     nh_.param(ns + "/position_exp_topic", position_exp_topic_, std::string("/position_exp"));
-    nh_.param(ns + "/tube_upperbound_topic", tube_upperbound_topic_, std::string("/tube_upperbound"));
-    nh_.param(ns + "/tube_lowerbound_topic", tube_lowerbound_topic_, std::string("/tube_lowerbound"));
-    nh_.param(ns + "/tube_bound_radius", tube_bound_radius_, 0.3);
 
     if (odom_topic_.empty()) {
       ROS_ERROR("odom_topic parameter is empty! Using default: /odom");
@@ -91,9 +85,21 @@ public:
     ROS_INFO("cmd_vel_topic: %s", cmd_vel_topic_.c_str());
     ROS_INFO("path_topic: %s", path_topic_.c_str());
     ROS_INFO("position_exp_topic: %s", position_exp_topic_.c_str());
-    ROS_INFO("tube_upperbound_topic: %s", tube_upperbound_topic_.c_str());
-    ROS_INFO("tube_lowerbound_topic: %s", tube_lowerbound_topic_.c_str());
     ROS_INFO("=========================");
+
+    nh_.param(ns + "/tube_bound_x", tube_bound_x_, 0.5);
+    nh_.param(ns + "/tube_bound_y", tube_bound_y_, 0.5);
+    nh_.param(ns + "/tube_bound_z", tube_bound_z_, 0.5);
+    nh_.param(ns + "/tube_noise_range_x", tube_noise_range_x_, 0.05);
+    nh_.param(ns + "/tube_noise_range_y", tube_noise_range_y_, 0.05);
+    nh_.param(ns + "/tube_noise_range_z", tube_noise_range_z_, 0.05);
+    nh_.param(ns + "/tube_publish_rate", tube_publish_rate_, 10.0);
+
+    ROS_INFO("=== Tube Bound Configuration ===");
+    ROS_INFO("tube_bound: [%.3f, %.3f, %.3f]", tube_bound_x_, tube_bound_y_, tube_bound_z_);
+    ROS_INFO("tube_noise_range: [%.3f, %.3f, %.3f]", tube_noise_range_x_, tube_noise_range_y_, tube_noise_range_z_);
+    ROS_INFO("tube_publish_rate: %.1f Hz", tube_publish_rate_);
+    ROS_INFO("================================");
 
     if (trajectory_file_.find("/") != 0) {
       std::string package_path = ros::package::getPath("traj_mpc");
@@ -118,26 +124,19 @@ public:
 
     odom_sub_ = nh_.subscribe(odom_topic_, 10, &TrajMPCNode::odomCallback, this);
 
-    cmd_vel_echo_sub_ = nh_.subscribe(cmd_vel_topic_, 10, &TrajMPCNode::cmdVelEchoCallback, this);
-
-    // Use queue_size=1 and latch=false for cmd_vel to ensure latest command is used
-    cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>(cmd_vel_topic_, 1);
+    cmd_vel_pub_ = nh_.advertise<geometry_msgs::Twist>(cmd_vel_topic_, 10);
     path_pub_ = nh_.advertise<nav_msgs::Path>(path_topic_, 10);
     position_exp_pub_ = nh_.advertise<nav_msgs::Odometry>(position_exp_topic_, 10);
-    tube_upperbound_pub_ = nh_.advertise<nav_msgs::Odometry>(tube_upperbound_topic_, 10);
-    tube_lowerbound_pub_ = nh_.advertise<nav_msgs::Odometry>(tube_lowerbound_topic_, 10);
+    tube_upperbound_pub_ = nh_.advertise<nav_msgs::Odometry>("/tube_upperbound", 10);
+    tube_lowerbound_pub_ = nh_.advertise<nav_msgs::Odometry>("/tube_lowerbound", 10);
 
     double control_rate;
-    nh_.param(ns + "/control_rate", control_rate, 20.0);
+    nh_.param(ns + "/control_rate", control_rate, 10.0);
     control_timer_ = nh_.createTimer(ros::Duration(1.0 / control_rate), &TrajMPCNode::controlCallback, this);
 
-    // Hold timer: re-publish last command at high frequency to override
-    // any conflicting publisher on the same cmd_vel topic
-    double cmd_vel_hold_rate;
-    nh_.param(ns + "/cmd_vel_hold_rate", cmd_vel_hold_rate, 50.0);
-    cmd_vel_hold_timer_ = nh_.createTimer(ros::Duration(1.0 / cmd_vel_hold_rate), &TrajMPCNode::cmdVelHoldCallback, this);
-
     path_publish_timer_ = nh_.createTimer(ros::Duration(0.1), &TrajMPCNode::publishReferencePath, this);
+
+    tube_publish_timer_ = nh_.createTimer(ros::Duration(1.0 / tube_publish_rate_), &TrajMPCNode::publishTubeBounds, this);
 
     initializeExpectedPosition();
 
@@ -149,8 +148,6 @@ public:
     ROS_INFO("max_vel: [%.2f, %.2f, %.2f]", p.max_vel_x, p.max_vel_y, p.max_vel_z);
     ROS_INFO("max_acc: [%.2f, %.2f, %.2f]", p.max_acc_x, p.max_acc_y, p.max_acc_z);
     ROS_INFO("gravity: %.2f, in_model: %s", p.gravity, p.need_gravity_compensation ? "true" : "false");
-    ROS_INFO("tube_bound_radius: %.3f", tube_bound_radius_);
-    ROS_INFO("control_rate: %.1f Hz, cmd_vel_hold_rate: %.1f Hz", control_rate, cmd_vel_hold_rate);
     ROS_INFO("============================");
 
     ROS_INFO("Traj MPC Node initialized (First-Order Mass Point Model)");
@@ -199,33 +196,6 @@ public:
     last_published_waypoint_index_ = waypoint_index;
   }
 
-  void publishTubeBounds(const Waypoint& target_wp) {
-    double r = tube_bound_radius_;
-
-    double rand_x = uniform_dist_(rng_);
-    double rand_y = uniform_dist_(rng_);
-    double rand_z = uniform_dist_(rng_);
-
-    nav_msgs::Odometry upper_msg;
-    upper_msg.header.frame_id = "camera_init";
-    upper_msg.header.stamp = ros::Time::now();
-    upper_msg.pose.pose.position.x = target_wp.x + r * (1.0 + 0.1 * rand_x);
-    upper_msg.pose.pose.position.y = target_wp.y + r * (1.0 + 0.1 * rand_y);
-    upper_msg.pose.pose.position.z = target_wp.z + r * (1.0 + 0.1 * rand_z);
-    upper_msg.pose.pose.orientation.w = 1.0;
-
-    nav_msgs::Odometry lower_msg;
-    lower_msg.header.frame_id = "camera_init";
-    lower_msg.header.stamp = ros::Time::now();
-    lower_msg.pose.pose.position.x = target_wp.x - r * (1.0 + 0.1 * rand_x);
-    lower_msg.pose.pose.position.y = target_wp.y - r * (1.0 + 0.1 * rand_y);
-    lower_msg.pose.pose.position.z = target_wp.z - r * (1.0 + 0.1 * rand_z);
-    lower_msg.pose.pose.orientation.w = 1.0;
-
-    tube_upperbound_pub_.publish(upper_msg);
-    tube_lowerbound_pub_.publish(lower_msg);
-  }
-
   void initializeReferencePath() {
     auto waypoints = trajectory_loader_.getWaypoints();
     reference_path_.header.frame_id = "camera_init";
@@ -251,6 +221,31 @@ public:
     path_pub_.publish(reference_path_);
   }
 
+  void publishTubeBounds(const ros::TimerEvent& event) {
+    ros::Time now = ros::Time::now();
+
+    nav_msgs::Odometry upper_bound;
+    upper_bound.header.frame_id = "camera_init";
+    upper_bound.header.stamp = now;
+    upper_bound.pose.pose.position.x = expected_position_.pose.pose.position.x + tube_bound_x_ + generateNoise(tube_noise_range_x_);
+    upper_bound.pose.pose.position.y = expected_position_.pose.pose.position.y + tube_bound_y_ + generateNoise(tube_noise_range_y_);
+    upper_bound.pose.pose.position.z = expected_position_.pose.pose.position.z + tube_bound_z_ + generateNoise(tube_noise_range_z_);
+    upper_bound.pose.pose.orientation = expected_position_.pose.pose.orientation;
+    upper_bound.twist.twist = expected_position_.twist.twist;
+
+    nav_msgs::Odometry lower_bound;
+    lower_bound.header.frame_id = "camera_init";
+    lower_bound.header.stamp = now;
+    lower_bound.pose.pose.position.x = expected_position_.pose.pose.position.x - tube_bound_x_ + generateNoise(tube_noise_range_x_);
+    lower_bound.pose.pose.position.y = expected_position_.pose.pose.position.y - tube_bound_y_ + generateNoise(tube_noise_range_y_);
+    lower_bound.pose.pose.position.z = expected_position_.pose.pose.position.z - tube_bound_z_ + generateNoise(tube_noise_range_z_);
+    lower_bound.pose.pose.orientation = expected_position_.pose.pose.orientation;
+    lower_bound.twist.twist = expected_position_.twist.twist;
+
+    tube_upperbound_pub_.publish(upper_bound);
+    tube_lowerbound_pub_.publish(lower_bound);
+  }
+
   void odomCallback(const nav_msgs::Odometry::ConstPtr& odom) {
     current_odom_ = *odom;
     mpc_controller_.updateState(odom);
@@ -259,19 +254,6 @@ public:
     if (control_state_ == STATE_IDLE) {
       ROS_INFO("First odometry received, starting trajectory tracking...");
       control_state_ = STATE_TRAJECTORY_TRACKING;
-    }
-  }
-
-  void cmdVelEchoCallback(const geometry_msgs::Twist::ConstPtr& msg) {
-    echo_cmd_vel_ = *msg;
-    echo_received_ = true;
-  }
-
-  // Hold callback: re-publish last command at high frequency (50Hz)
-  // to override any conflicting publisher on the cmd_vel topic
-  void cmdVelHoldCallback(const ros::TimerEvent& event) {
-    if (control_state_ == STATE_TRAJECTORY_TRACKING && odom_received_) {
-      cmd_vel_pub_.publish(last_published_cmd_vel_);
     }
   }
 
@@ -317,8 +299,6 @@ public:
         double error_z = target_z - current_z;
         double distance = std::sqrt(error_x * error_x + error_y * error_y + error_z * error_z);
 
-        publishTubeBounds(target_wp);
-
         if (distance < waypoint_reached_threshold_) {
           ROS_INFO("=== Waypoint %zu/%zu REACHED ===", current_waypoint_index_ + 1, total_waypoints);
           ROS_INFO("  target=(%.3f, %.3f, %.3f), current=(%.3f, %.3f, %.3f), dist=%.4f m",
@@ -361,13 +341,7 @@ public:
           cmd_vel.linear.x = vel_cmd(0);
           cmd_vel.linear.y = vel_cmd(1);
           cmd_vel.linear.z = vel_cmd(2);
-          cmd_vel.angular.x = 0.0;
-          cmd_vel.angular.y = 0.0;
-          cmd_vel.angular.z = 0.0;
-
           cmd_vel_pub_.publish(cmd_vel);
-          last_published_cmd_vel_ = cmd_vel;
-          publish_count_++;
 
           const MPCParams& p = mpc_controller_.getParams();
           ROS_INFO("[WP %zu/%zu] pos_err=(%+.3f,%+.3f,%+.3f) dist=%.3f",
@@ -381,28 +355,6 @@ public:
                    acc_cmd(0), acc_cmd(1), acc_cmd(2));
           ROS_INFO("  cmd_vel=(%+.3f,%+.3f,%+.3f)",
                    vel_cmd(0), vel_cmd(1), vel_cmd(2));
-
-          total_echo_checks_++;
-          if (echo_received_) {
-            double echo_diff_x = std::abs(echo_cmd_vel_.linear.x - last_published_cmd_vel_.linear.x);
-            double echo_diff_y = std::abs(echo_cmd_vel_.linear.y - last_published_cmd_vel_.linear.y);
-            double echo_diff_z = std::abs(echo_cmd_vel_.linear.z - last_published_cmd_vel_.linear.z);
-            double max_diff = std::max({echo_diff_x, echo_diff_y, echo_diff_z});
-
-            if (max_diff > 0.01) {
-              mismatch_count_++;
-              ROS_WARN("  [MISMATCH %d/%d] pub=(%+.3f,%+.3f,%+.3f) echo=(%+.3f,%+.3f,%+.3f) diff=(%.4f,%.4f,%.4f)",
-                       mismatch_count_, total_echo_checks_,
-                       last_published_cmd_vel_.linear.x, last_published_cmd_vel_.linear.y, last_published_cmd_vel_.linear.z,
-                       echo_cmd_vel_.linear.x, echo_cmd_vel_.linear.y, echo_cmd_vel_.linear.z,
-                       echo_diff_x, echo_diff_y, echo_diff_z);
-            } else {
-              ROS_INFO("  echo_ok: echo=(%+.3f,%+.3f,%+.3f) max_diff=%.4f mismatch_rate=%.1f%%",
-                       echo_cmd_vel_.linear.x, echo_cmd_vel_.linear.y, echo_cmd_vel_.linear.z, max_diff,
-                       total_echo_checks_ > 0 ? 100.0 * mismatch_count_ / total_echo_checks_ : 0.0);
-            }
-          }
-
           ROS_INFO("  W: P=[%.1f,%.1f,%.1f] Q=[%.1f,%.1f,%.1f] R=[%.2f,%.2f,%.2f]",
                    p.weight_pos_x, p.weight_pos_y, p.weight_pos_z,
                    p.weight_vel_x, p.weight_vel_y, p.weight_vel_z,
@@ -422,11 +374,7 @@ public:
         stop_cmd.linear.x = 0.0;
         stop_cmd.linear.y = 0.0;
         stop_cmd.linear.z = 0.0;
-        stop_cmd.angular.x = 0.0;
-        stop_cmd.angular.y = 0.0;
-        stop_cmd.angular.z = 0.0;
         cmd_vel_pub_.publish(stop_cmd);
-        last_published_cmd_vel_ = stop_cmd;
         break;
       }
     }
